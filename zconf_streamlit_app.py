@@ -56,136 +56,276 @@ st.set_page_config(
 # ══════════════════════════════════════════════════════════════
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Syne:wght@700;800&family=DM+Sans:wght@400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Crimson+Pro:ital,wght@0,400;0,600;1,400&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
 
+/* ── Base ── */
 html, body, [class*="css"] {
-    font-family: 'DM Sans', sans-serif;
+    font-family: 'Plus Jakarta Sans', sans-serif;
+    color: #1a1f2e;
 }
 
-h1, h2, h3 { font-family: 'Syne', sans-serif !important; }
+h1, h2, h3, h4 { font-family: 'Plus Jakarta Sans', sans-serif !important; }
 
 .stApp {
-    background: #0b0f1a;
-    color: #e8eaf6;
+    background: #f4f6fb;
 }
 
-/* Sidebar */
+/* ── Sidebar ── */
 [data-testid="stSidebar"] {
-    background: #111827 !important;
-    border-right: 1px solid #1e293b;
+    background: #ffffff !important;
+    border-right: 1px solid #e2e8f0 !important;
+}
+[data-testid="stSidebar"] * {
+    color: #374151 !important;
+}
+[data-testid="stSidebar"] .stSlider label,
+[data-testid="stSidebar"] .stCheckbox label {
+    font-size: 13px !important;
+    font-weight: 600 !important;
+    color: #374151 !important;
+    letter-spacing: 0.2px;
+}
+[data-testid="stSidebar"] [data-testid="stExpander"] {
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    margin-bottom: 8px;
 }
 
-/* Metric cards */
-.metric-card {
-    background: linear-gradient(135deg, #131c2e, #1a2540);
-    border: 1px solid #1e3a5f;
-    border-radius: 12px;
-    padding: 18px 22px;
-    text-align: center;
+/* ── Main content background ── */
+[data-testid="stAppViewContainer"] > .main {
+    background: #f4f6fb;
 }
+[data-testid="block-container"] {
+    padding-top: 2rem;
+    padding-bottom: 3rem;
+}
+
+/* ── Metric cards ── */
+.metric-card {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 14px;
+    padding: 20px 18px 16px 18px;
+    text-align: center;
+    box-shadow: 0 1px 6px rgba(0,0,0,0.06);
+    transition: box-shadow 0.2s;
+}
+.metric-card:hover { box-shadow: 0 4px 16px rgba(0,0,0,0.10); }
 .metric-label {
-    font-size: 11px;
-    color: #64748b;
+    font-size: 10.5px;
+    color: #94a3b8;
     text-transform: uppercase;
-    letter-spacing: 1.5px;
-    font-family: 'DM Mono', monospace;
+    letter-spacing: 1.6px;
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 500;
 }
 .metric-value {
-    font-size: 28px;
+    font-size: 30px;
     font-weight: 800;
-    font-family: 'Syne', sans-serif;
-    margin-top: 4px;
+    font-family: 'Plus Jakarta Sans', sans-serif;
+    margin-top: 6px;
+    line-height: 1.1;
 }
-.metric-green  { color: #34d399; }
-.metric-red    { color: #f87171; }
-.metric-blue   { color: #60a5fa; }
-.metric-yellow { color: #fbbf24; }
-
-/* Section headers */
-.section-header {
-    font-family: 'Syne', sans-serif;
-    font-size: 18px;
-    font-weight: 800;
-    letter-spacing: 0.5px;
-    padding: 8px 0 6px 0;
-    border-bottom: 2px solid #1e3a5f;
-    margin-bottom: 12px;
-}
-.buy-header  { color: #34d399; }
-.sell-header { color: #f87171; }
-.conf-header { color: #60a5fa; }
-.div-header  { color: #fbbf24; }
-.bt-header   { color: #a78bfa; }
-
-/* Table styling */
-.stDataFrame { border-radius: 10px; overflow: hidden; }
-[data-testid="stDataFrame"] table {
-    font-family: 'DM Mono', monospace !important;
-    font-size: 12px !important;
-}
-
-/* Status pills */
-.pill {
-    display: inline-block;
-    padding: 2px 10px;
-    border-radius: 20px;
+.metric-green  { color: #059669; }
+.metric-red    { color: #dc2626; }
+.metric-blue   { color: #2563eb; }
+.metric-yellow { color: #d97706; }
+.metric-sub {
     font-size: 11px;
-    font-weight: 600;
-    font-family: 'DM Mono', monospace;
+    color: #94a3b8;
+    margin-top: 3px;
+    font-family: 'JetBrains Mono', monospace;
 }
-.pill-strong-buy  { background: #065f46; color: #6ee7b7; }
-.pill-buy         { background: #064e3b; color: #34d399; }
-.pill-sell        { background: #7f1d1d; color: #fca5a5; }
-.pill-strong-sell { background: #991b1b; color: #f87171; }
-.pill-neutral     { background: #1e293b; color: #94a3b8; }
 
-/* Scan button */
+/* ── Section headers ── */
+.section-header {
+    font-family: 'Plus Jakarta Sans', sans-serif;
+    font-size: 17px;
+    font-weight: 800;
+    letter-spacing: -0.2px;
+    padding: 20px 0 10px 0;
+    margin-bottom: 4px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.section-header::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: #e2e8f0;
+    margin-left: 10px;
+}
+.buy-header  { color: #065f46; }
+.sell-header { color: #991b1b; }
+.conf-header { color: #1e40af; }
+.div-header  { color: #92400e; }
+.bt-header   { color: #5b21b6; }
+
+/* ── Hero banner ── */
+.hero-banner {
+    background: linear-gradient(135deg, #1e3a8a 0%, #1d4ed8 50%, #0284c7 100%);
+    border-radius: 18px;
+    padding: 36px 40px;
+    margin-bottom: 28px;
+    position: relative;
+    overflow: hidden;
+}
+.hero-banner::before {
+    content: '';
+    position: absolute;
+    top: -60px; right: -60px;
+    width: 200px; height: 200px;
+    background: rgba(255,255,255,0.06);
+    border-radius: 50%;
+}
+.hero-banner::after {
+    content: '';
+    position: absolute;
+    bottom: -40px; left: 30%;
+    width: 140px; height: 140px;
+    background: rgba(255,255,255,0.04);
+    border-radius: 50%;
+}
+.hero-eyebrow {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: rgba(255,255,255,0.65);
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    margin-bottom: 10px;
+}
+.hero-title {
+    font-family: 'Plus Jakarta Sans', sans-serif;
+    font-size: 34px;
+    font-weight: 800;
+    color: #ffffff;
+    line-height: 1.15;
+    margin: 0 0 10px 0;
+    letter-spacing: -0.5px;
+}
+.hero-subtitle {
+    font-size: 14px;
+    color: rgba(255,255,255,0.72);
+    font-family: 'JetBrains Mono', monospace;
+    letter-spacing: 0.3px;
+}
+.hero-badge {
+    display: inline-block;
+    background: rgba(255,255,255,0.18);
+    color: #ffffff;
+    border-radius: 20px;
+    padding: 4px 14px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    margin-top: 14px;
+    font-family: 'Plus Jakarta Sans', sans-serif;
+    border: 1px solid rgba(255,255,255,0.25);
+}
+
+/* ── Info box ── */
+.info-box {
+    background: #eff6ff;
+    border: 1px solid #bfdbfe;
+    border-left: 4px solid #2563eb;
+    border-radius: 10px;
+    padding: 16px 20px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    color: #1e40af;
+    line-height: 2;
+    margin: 12px 0;
+}
+
+/* ── Scan button ── */
 .stButton > button {
     background: linear-gradient(135deg, #1d4ed8, #2563eb) !important;
     color: white !important;
-    font-family: 'Syne', sans-serif !important;
+    font-family: 'Plus Jakarta Sans', sans-serif !important;
     font-weight: 700 !important;
-    font-size: 15px !important;
+    font-size: 14px !important;
     border: none !important;
-    padding: 12px 32px !important;
+    padding: 11px 28px !important;
     border-radius: 10px !important;
     width: 100%;
-    letter-spacing: 0.5px;
+    letter-spacing: 0.3px;
+    box-shadow: 0 2px 8px rgba(37, 99, 235, 0.30);
+    transition: all 0.2s;
 }
 .stButton > button:hover {
     background: linear-gradient(135deg, #1e40af, #1d4ed8) !important;
     transform: translateY(-1px);
-    box-shadow: 0 4px 20px rgba(37, 99, 235, 0.4);
+    box-shadow: 0 6px 20px rgba(37, 99, 235, 0.40) !important;
 }
 
-/* Progress bar */
+/* ── Progress bar ── */
 .stProgress > div > div {
-    background: linear-gradient(90deg, #1d4ed8, #34d399) !important;
+    background: linear-gradient(90deg, #2563eb, #059669) !important;
     border-radius: 4px;
 }
 
-/* Info box */
-.info-box {
-    background: #111827;
-    border: 1px solid #1e3a5f;
-    border-left: 4px solid #2563eb;
-    border-radius: 8px;
-    padding: 14px 18px;
-    font-family: 'DM Mono', monospace;
-    font-size: 12px;
-    color: #94a3b8;
-    line-height: 1.8;
-}
-
-/* Tab style override */
+/* ── Tab style ── */
 [data-baseweb="tab-list"] {
-    background: #111827 !important;
-    border-radius: 10px !important;
-    gap: 4px !important;
+    background: #ffffff !important;
+    border-radius: 12px !important;
+    border: 1px solid #e2e8f0 !important;
+    padding: 4px !important;
+    gap: 2px !important;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.05);
 }
 [data-baseweb="tab"] {
-    font-family: 'Syne', sans-serif !important;
-    font-size: 13px !important;
+    font-family: 'Plus Jakarta Sans', sans-serif !important;
+    font-size: 13.5px !important;
+    font-weight: 600 !important;
+    color: #64748b !important;
+    border-radius: 8px !important;
+    padding: 8px 18px !important;
+}
+[aria-selected="true"][data-baseweb="tab"] {
+    background: #2563eb !important;
+    color: #ffffff !important;
+}
+
+/* ── Dataframe ── */
+.stDataFrame {
+    border-radius: 12px !important;
+    overflow: hidden !important;
+    border: 1px solid #e2e8f0 !important;
+    box-shadow: 0 1px 6px rgba(0,0,0,0.05);
+}
+
+/* ── Expander ── */
+[data-testid="stExpander"] {
+    background: #ffffff;
+    border: 1px solid #e2e8f0 !important;
+    border-radius: 12px !important;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.04);
+}
+
+/* ── Scan timestamp ── */
+.scan-meta {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: #94a3b8;
+    margin: 6px 0 18px 0;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+}
+.scan-meta span {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+}
+
+/* ── Divider ── */
+.styled-divider {
+    border: none;
+    height: 1px;
+    background: linear-gradient(90deg, #e2e8f0, transparent);
+    margin: 24px 0;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -1068,7 +1208,7 @@ def signal_color(s):
         "BUY":         "background-color:#064e3b;color:#34d399;font-weight:600",
         "SELL":        "background-color:#7f1d1d;color:#fca5a5;font-weight:600",
         "STRONG SELL": "background-color:#991b1b;color:#f87171;font-weight:600",
-        "NEUTRAL":     "background-color:#1e293b;color:#94a3b8",
+        "NEUTRAL":     "background-color:#f1f5f9;color:#64748b",
     }
     return colors.get(s, "")
 
@@ -1093,8 +1233,8 @@ def metric_card(label, value, color_class="metric-blue"):
 # ══════════════════════════════════════════════════════════════
 
 with st.sidebar:
-    st.markdown('<h2 style="font-family:Syne,sans-serif;color:#60a5fa;margin-bottom:4px">⚙️ Config</h2>', unsafe_allow_html=True)
-    st.markdown('<div style="color:#64748b;font-size:12px;margin-bottom:16px">Adjust scanner parameters</div>', unsafe_allow_html=True)
+    st.markdown('<div style="font-family:Plus Jakarta Sans,sans-serif;font-size:18px;font-weight:800;color:#1e3a8a;margin-bottom:2px;padding-top:8px">⚙️ Scanner Config</div>', unsafe_allow_html=True)
+    st.markdown('<div style="font-size:11px;color:#94a3b8;font-family:JetBrains Mono,monospace;margin-bottom:16px;letter-spacing:0.5px">Adjust filters & parameters</div>', unsafe_allow_html=True)
 
     with st.expander("🔬 Filters & Thresholds", expanded=True):
         workers        = st.slider("Parallel workers",    4, 16, DEFAULT_CFG["workers"])
@@ -1129,7 +1269,11 @@ with st.sidebar:
     st.session_state["cfg"] = cfg
 
     st.markdown("---")
-    st.markdown('<div style="font-size:11px;color:#475569;font-family:DM Mono,monospace">📦 Universe: ' + str(len(ALL_SYMBOLS)) + ' NSE stocks<br>📅 Data: 3Y daily via yfinance</div>', unsafe_allow_html=True)
+    st.markdown(f'''<div style="font-size:11px;color:#94a3b8;font-family:JetBrains Mono,monospace;line-height:2;background:#f8fafc;border-radius:8px;padding:10px 12px;border:1px solid #e2e8f0">
+📦 Universe: <b style="color:#374151">{len(ALL_SYMBOLS)} NSE stocks</b><br>
+📅 Data: <b style="color:#374151">3Y daily · yfinance</b><br>
+🆓 Hosted: <b style="color:#374151">Streamlit Cloud</b>
+</div>''', unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -1137,15 +1281,13 @@ with st.sidebar:
 # ══════════════════════════════════════════════════════════════
 
 st.markdown("""
-<div style="padding:28px 0 8px 0">
-    <div style="font-family:Syne,sans-serif;font-size:11px;color:#3b82f6;letter-spacing:3px;text-transform:uppercase;margin-bottom:6px">NSE SWING TRADING</div>
-    <h1 style="font-family:Syne,sans-serif;font-size:36px;font-weight:800;color:#f1f5f9;margin:0;line-height:1.1">
-        Value Momentum Scanner
-        <span style="font-size:16px;color:#64748b;font-weight:400;margin-left:12px">v1.6</span>
-    </h1>
-    <div style="color:#64748b;font-size:13px;margin-top:8px;font-family:DM Mono,monospace">
-        CAPE · VWAP_Z · RSI_Z · MACD_Z  ·  IMP 1–7 Active  ·  Dual TF Confluence
-    </div>
+<div class="hero-banner">
+    <div class="hero-eyebrow">📈 &nbsp; NSE Swing Trading &nbsp;·&nbsp; Quantitative Screener</div>
+    <div class="hero-title">Value Momentum Scanner</div>
+    <div class="hero-subtitle">CAPE &nbsp;·&nbsp; VWAP Z-Score &nbsp;·&nbsp; RSI Z &nbsp;·&nbsp; MACD Z &nbsp;·&nbsp; IMP 1–7 Active &nbsp;·&nbsp; Dual Timeframe Confluence</div>
+    <span class="hero-badge">v1.6</span>
+    <span class="hero-badge">276 NSE Stocks</span>
+    <span class="hero-badge">Daily + Weekly</span>
 </div>
 """, unsafe_allow_html=True)
 
@@ -1250,7 +1392,12 @@ with tab_scan:
             c4.markdown(metric_card("SELL Confluence", len(sell_conf_syms),  "metric-yellow"), unsafe_allow_html=True)
             c5.markdown(metric_card("Divergences",     len(df_div),          "metric-blue"),   unsafe_allow_html=True)
 
-            st.markdown(f'<div style="color:#475569;font-size:11px;font-family:DM Mono,monospace;margin-top:6px;margin-bottom:16px">Scan completed: {ts_str} — Universe: {len(ALL_SYMBOLS)} stocks</div>', unsafe_allow_html=True)
+            st.markdown(f'''<div class="scan-meta">
+<span>🕐 Scan completed: <b>{ts_str}</b></span>
+<span>📦 Universe: <b>{len(ALL_SYMBOLS)} stocks</b></span>
+<span>🟢 BUY: <b>{len(df_buy)}</b></span>
+<span>🔴 SELL: <b>{len(df_sell)}</b></span>
+</div>''', unsafe_allow_html=True)
 
             # ── CHARTS ─────────────────────────────────────────
             if _PLOTLY and not df_buy.empty:
@@ -1262,14 +1409,14 @@ with tab_scan:
                         fig1 = go.Figure()
                         fig1.add_trace(go.Histogram(
                             x=df_buy[df_buy["TF"]=="Daily"]["Composite"],
-                            name="Daily BUY", marker_color="#34d399", opacity=0.7, nbinsx=20))
+                            name="Daily BUY", marker_color="#059669", opacity=0.7, nbinsx=20))
                         fig1.add_trace(go.Histogram(
                             x=df_buy[df_buy["TF"]=="Weekly"]["Composite"],
-                            name="Weekly BUY", marker_color="#60a5fa", opacity=0.7, nbinsx=20))
+                            name="Weekly BUY", marker_color="#2563eb", opacity=0.7, nbinsx=20))
                         fig1.update_layout(
                             title="Composite Score Distribution (BUY)",
-                            paper_bgcolor="#111827", plot_bgcolor="#111827",
-                            font=dict(color="#94a3b8", family="DM Sans"),
+                            paper_bgcolor="#ffffff", plot_bgcolor="#f8fafc",
+                            font=dict(color="#374151", family="Plus Jakarta Sans"),
                             barmode="overlay", height=280,
                             margin=dict(l=20, r=20, t=40, b=20))
                         st.plotly_chart(fig1, use_container_width=True)
@@ -1280,7 +1427,7 @@ with tab_scan:
                                     .nlargest(15, "Composite")[["Symbol","Composite","Strength"]]
                                     .copy())
                         if not top_buys.empty:
-                            color_map = {"STRONG": "#34d399", "MODERATE": "#60a5fa", "WEAK": "#fbbf24", "": "#94a3b8"}
+                            color_map = {"STRONG": "#059669", "MODERATE": "#2563eb", "WEAK": "#d97706", "": "#94a3b8"}
                             colors_list = [color_map.get(s, "#94a3b8") for s in top_buys["Strength"]]
                             fig2 = go.Figure(go.Bar(
                                 x=top_buys["Symbol"], y=top_buys["Composite"],
@@ -1288,10 +1435,10 @@ with tab_scan:
                                 textposition="outside"))
                             fig2.update_layout(
                                 title="Top 15 Daily BUY by Composite",
-                                paper_bgcolor="#111827", plot_bgcolor="#111827",
-                                font=dict(color="#94a3b8", family="DM Sans"),
+                                paper_bgcolor="#ffffff", plot_bgcolor="#f8fafc",
+                                font=dict(color="#374151", family="Plus Jakarta Sans"),
                                 height=280, margin=dict(l=20, r=20, t=40, b=20),
-                                yaxis=dict(gridcolor="#1e293b"))
+                                yaxis=dict(gridcolor="#e2e8f0"))
                             st.plotly_chart(fig2, use_container_width=True)
 
             # ── BUY TABLES ─────────────────────────────────────
@@ -1502,19 +1649,19 @@ with tab_bt:
                     fig_r.add_vline(x=profit_pct, line_dash="dash", line_color="#fbbf24",
                                     annotation_text=f"Target {profit_pct:.0f}%")
                     fig_r.update_layout(
-                        title="Return Distribution", paper_bgcolor="#111827", plot_bgcolor="#111827",
-                        font=dict(color="#94a3b8", family="DM Sans"), height=280,
-                        margin=dict(l=20, r=20, t=40, b=20), yaxis=dict(gridcolor="#1e293b"))
+                        title="Return Distribution", paper_bgcolor="#ffffff", plot_bgcolor="#f8fafc",
+                        font=dict(color="#374151", family="Plus Jakarta Sans"), height=280,
+                        margin=dict(l=20, r=20, t=40, b=20), yaxis=dict(gridcolor="#e2e8f0"))
                     st.plotly_chart(fig_r, use_container_width=True)
 
                 with ch2:
                     # Hold weeks distribution
                     fig_h = go.Figure(go.Histogram(
-                        x=df_hit["Hold_Wks"], nbinsx=20, marker_color="#60a5fa"))
+                        x=df_hit["Hold_Wks"], nbinsx=20, marker_color="#2563eb"))
                     fig_h.update_layout(
-                        title="Hold Duration (Winners)", paper_bgcolor="#111827", plot_bgcolor="#111827",
-                        font=dict(color="#94a3b8", family="DM Sans"), height=280,
-                        margin=dict(l=20, r=20, t=40, b=20), yaxis=dict(gridcolor="#1e293b"))
+                        title="Hold Duration (Winners)", paper_bgcolor="#ffffff", plot_bgcolor="#f8fafc",
+                        font=dict(color="#374151", family="Plus Jakarta Sans"), height=280,
+                        margin=dict(l=20, r=20, t=40, b=20), yaxis=dict(gridcolor="#e2e8f0"))
                     st.plotly_chart(fig_h, use_container_width=True)
 
             # Trade log
@@ -1570,17 +1717,25 @@ with tab_focus:
                 if sub.empty: continue
                 row = sub.iloc[0]
 
-                sig_color = "#34d399" if "BUY" in row["Signal"] else ("#f87171" if "SELL" in row["Signal"] else "#94a3b8")
+                sig_color_map = {True: "#059669", False: "#dc2626"}
+                is_buy = "BUY" in row["Signal"]
+                is_sell = "SELL" in row["Signal"]
+                border_color = "#059669" if is_buy else ("#dc2626" if is_sell else "#94a3b8")
+                bg_color     = "#f0fdf4" if is_buy else ("#fff5f5" if is_sell else "#f8fafc")
+                text_color   = "#065f46" if is_buy else ("#991b1b" if is_sell else "#374151")
                 st.markdown(f"""
-                <div style="background:#131c2e;border:1px solid #1e3a5f;border-left:4px solid {sig_color};
-                            border-radius:10px;padding:16px 20px;margin-bottom:12px">
-                    <span style="font-family:Syne,sans-serif;font-size:16px;font-weight:700;color:{sig_color}">{tf}</span>
-                    &nbsp;&nbsp;
-                    <span style="background:#1e293b;color:#e2e8f0;padding:3px 12px;border-radius:20px;font-size:13px;font-family:DM Mono,monospace">
-                        {row['Signal']} · {row['Strength'] or 'N/A'}</span>
-                    &nbsp;&nbsp;
-                    <span style="color:#64748b;font-size:12px;font-family:DM Mono,monospace">
-                        Close: ₹{row['Close']}  ·  RSI: {row['RSI']}  ·  Composite: {row['Composite']}</span>
+                <div style="background:{bg_color};border:1px solid #e2e8f0;border-left:5px solid {border_color};
+                            border-radius:12px;padding:18px 22px;margin-bottom:12px;
+                            box-shadow:0 1px 6px rgba(0,0,0,0.05)">
+                    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+                    <span style="font-family:Plus Jakarta Sans,sans-serif;font-size:15px;font-weight:800;color:{text_color}">{tf} Timeframe</span>
+                    <span style="background:{border_color};color:#fff;padding:3px 14px;border-radius:20px;font-size:12px;font-weight:700;font-family:Plus Jakarta Sans,sans-serif">
+                        {row['Signal']}</span>
+                    <span style="background:#eff6ff;color:#1e40af;padding:3px 12px;border-radius:20px;font-size:12px;font-family:JetBrains Mono,monospace;border:1px solid #bfdbfe">
+                        Confidence: {row['Strength'] or 'N/A'}</span>
+                    <span style="color:#64748b;font-size:12px;font-family:JetBrains Mono,monospace;margin-left:auto">
+                        ₹{row['Close']} &nbsp;·&nbsp; RSI {row['RSI']} &nbsp;·&nbsp; Z {row['Composite']}</span>
+                    </div>
                 </div>
                 """, unsafe_allow_html=True)
 
@@ -1603,15 +1758,16 @@ with tab_focus:
                             fig_c.add_trace(go.Candlestick(
                                 x=raw["Date"], open=raw["Open"], high=raw["High"],
                                 low=raw["Low"], close=raw["Close"], name="Price",
-                                increasing_line_color="#34d399", decreasing_line_color="#f87171"))
+                                increasing_line_color="#059669", decreasing_line_color="#dc2626",
+                                increasing_fillcolor="#d1fae5", decreasing_fillcolor="#fee2e2"))
                             fig_c.update_layout(
                                 title=f"{focus_sym} — 1 Year Daily Chart",
-                                paper_bgcolor="#111827", plot_bgcolor="#111827",
-                                font=dict(color="#94a3b8", family="DM Sans"),
+                                paper_bgcolor="#ffffff", plot_bgcolor="#f8fafc",
+                                font=dict(color="#374151", family="Plus Jakarta Sans"),
                                 xaxis_rangeslider_visible=False,
                                 height=400, margin=dict(l=20, r=20, t=40, b=20),
-                                yaxis=dict(gridcolor="#1e293b"),
-                                xaxis=dict(gridcolor="#1e293b"))
+                                yaxis=dict(gridcolor="#e2e8f0"),
+                                xaxis=dict(gridcolor="#e2e8f0"))
                             st.plotly_chart(fig_c, use_container_width=True)
                     except Exception as e:
                         st.caption(f"Chart unavailable: {e}")
