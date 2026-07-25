@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
 ═══════════════════════════════════════════════════════════════
- VALUE MOMENTUM SWING TRADING SCANNER — v1.9
+ VALUE MOMENTUM SWING TRADING SCANNER — v2.1
  NSE Swing Trading Screener with CAPE / RSI / MACD signals
 ───────────────────────────────────────────────────────────────
  Copyright © 2026 Dr Shantanu Samanta. All rights reserved.
 
  Author  : Dr Shantanu Samanta
  Contact : dr.shantanu.samanta@gmail.com
- Version : 1.9
+ Version : 2.1
  Licence : Proprietary — not for redistribution without the
            express written permission of the copyright holder.
 ═══════════════════════════════════════════════════════════════
@@ -49,6 +49,19 @@ untouched v1.9 reproduces v1.8 signal-for-signal):
                        an unreasonable multiple of ATR, i.e. where
                        the move cannot plausibly happen quickly.
 
+v2.1 — BUGFIX
+  StreamlitDuplicateElementId crash on startup. Two sidebar
+  checkboxes shared the label "Hard gate (else report-only)"
+  (regime_hard and cross_hard). Streamlit derives a widget's
+  internal ID from its type plus its parameters, so two
+  identical checkboxes collided and the app refused to render.
+
+  Fixed properly rather than minimally: EVERY widget in the app
+  now carries an explicit, unique key=, so this class of bug
+  cannot recur when new controls are added. The two labels were
+  also made distinct, since identical labels were confusing to
+  read even before they crashed anything.
+
 To run:
     pip install streamlit yfinance pandas numpy plotly reportlab tenacity
     streamlit run vms_scanner_v1_9.py
@@ -75,7 +88,7 @@ __author__ = "Dr Shantanu Samanta"
 __email__ = "dr.shantanu.samanta@gmail.com"
 __copyright__ = "Copyright © 2026 Dr Shantanu Samanta. All rights reserved."
 __license__ = "Proprietary"
-__version__ = "2.0"
+__version__ = "2.1"
 
 COPYRIGHT_LINE = "© 2026 Dr Shantanu Samanta · All rights reserved"
 
@@ -2910,16 +2923,16 @@ def render_sidebar() -> Dict[str, Any]:
         st.markdown('<div style="font-size:18px;font-weight:800;color:#1e3a8a;margin-bottom:16px">⚙️ Scanner Config</div>', unsafe_allow_html=True)
         
         with st.expander("🔬 Filters & Thresholds", expanded=True):
-            workers = st.slider("Parallel workers", 4, 16, DEFAULT_CFG["workers"])
-            min_composite = st.slider("Min |Composite|", 0.5, 2.5, DEFAULT_CFG["min_composite"], 0.05)
-            rsi_hard_max = st.slider("RSI hard gate (<)", 30, 60, int(DEFAULT_CFG["rsi_hard_max"]))
-            hi52_pct = st.slider("52W high % max", 0.5, 1.0, DEFAULT_CFG["hi52_pct"], 0.01)
-            bt_min_comp = st.slider("BT composite floor", 0.5, 2.5, DEFAULT_CFG["bt_min_composite"], 0.05)
+            workers = st.slider("Parallel workers", 4, 16, DEFAULT_CFG["workers"], key="sb_workers")
+            min_composite = st.slider("Min |Composite|", 0.5, 2.5, DEFAULT_CFG["min_composite"], 0.05, key="sb_min_composite")
+            rsi_hard_max = st.slider("RSI hard gate (<)", 30, 60, int(DEFAULT_CFG["rsi_hard_max"]), key="sb_rsi_hard_max")
+            hi52_pct = st.slider("52W high % max", 0.5, 1.0, DEFAULT_CFG["hi52_pct"], 0.01, key="sb_hi52_pct")
+            bt_min_comp = st.slider("BT composite floor", 0.5, 2.5, DEFAULT_CFG["bt_min_composite"], 0.05, key="sb_bt_min_comp")
         
         with st.expander("📊 Indicator Weights"):
-            wt_cape = st.slider("CAPE weight", 0, 50, int(DEFAULT_CFG["wt_cape"]))
-            wt_rsi = st.slider("RSI weight", 0, 50, int(DEFAULT_CFG["wt_rsi"]))
-            wt_macd = st.slider("MACD weight", 0, 50, int(DEFAULT_CFG["wt_macd"]))
+            wt_cape = st.slider("CAPE weight", 0, 50, int(DEFAULT_CFG["wt_cape"]), key="sb_wt_cape")
+            wt_rsi = st.slider("RSI weight", 0, 50, int(DEFAULT_CFG["wt_rsi"]), key="sb_wt_rsi")
+            wt_macd = st.slider("MACD weight", 0, 50, int(DEFAULT_CFG["wt_macd"]), key="sb_wt_macd")
             
             # IMPROVEMENT 5: Validate weight sum
             total_wt = wt_cape + wt_rsi + wt_macd
@@ -2929,10 +2942,10 @@ def render_sidebar() -> Dict[str, Any]:
                 st.warning(f"⚠️ Weights sum to {total_wt} (not 100). Will normalize proportionally.")
         
         with st.expander("🔀 Feature Toggles"):
-            use_cape = st.checkbox("Use CAPE", DEFAULT_CFG["use_cape"])
-            div_enable = st.checkbox("Divergence detection", DEFAULT_CFG["div_enable"])
-            dz_accel = st.checkbox("ΔZ Acceleration", DEFAULT_CFG["dz_accel_enable"])
-            hi52_enable = st.checkbox("52W High gate", DEFAULT_CFG["hi52_enable"])
+            use_cape = st.checkbox("Use CAPE", DEFAULT_CFG["use_cape"], key="sb_use_cape")
+            div_enable = st.checkbox("Divergence detection", DEFAULT_CFG["div_enable"], key="sb_div_enable")
+            dz_accel = st.checkbox("ΔZ Acceleration", DEFAULT_CFG["dz_accel_enable"], key="sb_dz_accel")
+            hi52_enable = st.checkbox("52W High gate", DEFAULT_CFG["hi52_enable"], key="sb_hi52_enable")
 
         # ══════════════════════════════════════════════════════
         # v1.9 — ENTRY TIMING FILTERS
@@ -2952,18 +2965,17 @@ def render_sidebar() -> Dict[str, Any]:
                 help="The scanner is fully contrarian, so it buys depth. "
                      "Oversold inside an uptrend resolves in weeks; oversold "
                      "inside a downtrend can take quarters. Biggest single "
-                     "lever on time-to-target."
-            )
+                     "lever on time-to-target.", key="sb_regime_enable")
             regime_ma_d = st.slider("Daily MA length", 50, 300,
-                                    DEFAULT_CFG["regime_ma_len_daily"], 10)
+                                    DEFAULT_CFG["regime_ma_len_daily"], 10, key="sb_regime_ma_d")
             regime_ma_w = st.slider("Weekly MA length", 10, 60,
-                                    DEFAULT_CFG["regime_ma_len_weekly"], 2)
+                                    DEFAULT_CFG["regime_ma_len_weekly"], 2, key="sb_regime_ma_w")
             regime_above = st.checkbox("Require price above MA",
-                                       DEFAULT_CFG["regime_require_above"])
+                                       DEFAULT_CFG["regime_require_above"], key="sb_regime_above")
             regime_slope = st.checkbox("Require MA rising",
-                                       DEFAULT_CFG["regime_require_slope"])
-            regime_hard = st.checkbox("Hard gate (else report-only)",
-                                      DEFAULT_CFG["regime_hard"])
+                                       DEFAULT_CFG["regime_require_slope"], key="sb_regime_slope")
+            regime_hard = st.checkbox("Regime: hard gate (else report-only)",
+                                      DEFAULT_CFG["regime_hard"], key="sb_regime_hard")
 
             st.markdown("---")
             st.markdown("**B · 52-week band**")
@@ -2971,12 +2983,11 @@ def render_sidebar() -> Dict[str, Any]:
                 "Use 52W BAND instead of ceiling", DEFAULT_CFG["hi52_band_enable"],
                 help="v1.8's one-sided 0.85 ceiling mandates a >=15% drawdown, "
                      "which structurally selects damaged names — the slowest "
-                     "to reach a fixed target. A band drops the wreckage too."
-            )
+                     "to reach a fixed target. A band drops the wreckage too.", key="sb_hi52_band_enable")
             hi52_min = st.slider("52W ratio floor", 0.40, 0.95,
-                                 DEFAULT_CFG["hi52_pct_min"], 0.01)
+                                 DEFAULT_CFG["hi52_pct_min"], 0.01, key="sb_hi52_min")
             hi52_max = st.slider("52W ratio ceiling", 0.60, 1.00,
-                                 DEFAULT_CFG["hi52_pct_max"], 0.01)
+                                 DEFAULT_CFG["hi52_pct_max"], 0.01, key="sb_hi52_max")
             if hi52_min >= hi52_max:
                 st.error("❌ 52W floor must be below the ceiling")
 
@@ -2986,12 +2997,11 @@ def render_sidebar() -> Dict[str, Any]:
                 "Require composite CROSS (not plateau)", DEFAULT_CFG["cross_enable"],
                 help="v1.8 read only the last bar, so a stock parked above the "
                      "threshold for 30 bars looked identical to one that crossed "
-                     "yesterday. This requires a recent threshold crossing."
-            )
+                     "yesterday. This requires a recent threshold crossing.", key="sb_cross_enable")
             cross_max_bars = st.slider("Max bars since cross", 1, 10,
-                                       DEFAULT_CFG["cross_max_bars"])
-            cross_hard = st.checkbox("Hard gate (else report-only)",
-                                     DEFAULT_CFG["cross_hard"])
+                                       DEFAULT_CFG["cross_max_bars"], key="sb_cross_max_bars")
+            cross_hard = st.checkbox("Cross: hard gate (else report-only)",
+                                     DEFAULT_CFG["cross_hard"], key="sb_cross_hard")
 
             st.markdown("---")
             st.markdown("**H · ATR-normalised target**")
@@ -2999,21 +3009,19 @@ def render_sidebar() -> Dict[str, Any]:
                 "ATR reachability filter", DEFAULT_CFG["atr_target_enable"],
                 help="A flat 8% is a two-week move at 3% ATR and a multi-month "
                      "trek at 0.8%. Rejects candidates where the target is an "
-                     "implausible multiple of how far the stock actually travels."
-            )
-            atr_len = st.slider("ATR length", 7, 30, DEFAULT_CFG["atr_len"])
+                     "implausible multiple of how far the stock actually travels.", key="sb_atr_target_enable")
+            atr_len = st.slider("ATR length", 7, 30, DEFAULT_CFG["atr_len"], key="sb_atr_len")
             atr_max_mult = st.slider("Max ATRs to target", 1.0, 8.0,
-                                     DEFAULT_CFG["atr_max_mult"], 0.25)
+                                     DEFAULT_CFG["atr_max_mult"], 0.25, key="sb_atr_max_mult")
             atr_mode = st.radio(
                 "Target mode", ["gate", "adaptive"],
                 index=0 if DEFAULT_CFG["atr_target_mode"] == "gate" else 1,
                 horizontal=True,
                 help="gate = keep the fixed % target, just filter out "
                      "unreachable ones. adaptive = size each target to the "
-                     "stock's own ATR."
-            )
+                     "stock's own ATR.", key="sb_atr_mode")
             atr_target_mult = st.slider("Adaptive target (× ATR)", 1.0, 5.0,
-                                        DEFAULT_CFG["atr_target_mult"], 0.25)
+                                        DEFAULT_CFG["atr_target_mult"], 0.25, key="sb_atr_target_mult")
 
         # ══════════════════════════════════════════════════════
         # v2.0 — ITEMS D–K
@@ -3027,83 +3035,78 @@ def render_sidebar() -> Dict[str, Any]:
             div_use_enable = st.checkbox(
                 "Use divergence in the decision", DEFAULT_CFG["div_use_enable"],
                 help="Until v2.0 div_rsi/div_macd only produced a text label — "
-                     "they never touched All_Gates or the composite."
-            )
+                     "they never touched All_Gates or the composite.", key="sb_div_use_enable")
             div_mode = st.radio("Divergence mode", ["bonus", "gate"],
                                 index=0 if DEFAULT_CFG["div_mode"] == "bonus" else 1,
                                 horizontal=True,
                                 help="bonus = nudge the score; gate = refuse "
-                                     "signals with no supporting divergence.")
+                                     "signals with no supporting divergence.", key="sb_div_mode")
             div_bonus = st.slider("Bonus per divergent oscillator", 0.0, 1.0,
-                                  DEFAULT_CFG["div_bonus"], 0.05)
+                                  DEFAULT_CFG["div_bonus"], 0.05, key="sb_div_bonus")
             div_regular_only = st.checkbox("Regular divergence only (ignore hidden)",
-                                           DEFAULT_CFG["div_regular_only"])
+                                           DEFAULT_CFG["div_regular_only"], key="sb_div_regular_only")
             div_gate_require_both = st.checkbox("Gate mode: require RSI *and* MACD",
-                                                DEFAULT_CFG["div_gate_require_both"])
+                                                DEFAULT_CFG["div_gate_require_both"], key="sb_div_gate_require_both")
 
             st.markdown("---")
             st.markdown("**E · Volume (loaded since v1.8, never used)**")
             vol_enable = st.checkbox(
                 "Require volume expansion", DEFAULT_CFG["vol_enable"],
                 help="A turn on heavy volume is one somebody participated in. "
-                     "A turn on apathetic volume tends to drift."
-            )
-            vol_len = st.slider("Volume baseline length", 5, 60, DEFAULT_CFG["vol_len"])
+                     "A turn on apathetic volume tends to drift.", key="sb_vol_enable")
+            vol_len = st.slider("Volume baseline length", 5, 60, DEFAULT_CFG["vol_len"], key="sb_vol_len")
             vol_mult = st.slider("Volume vs baseline (×)", 1.0, 3.0,
-                                 DEFAULT_CFG["vol_mult"], 0.05)
+                                 DEFAULT_CFG["vol_mult"], 0.05, key="sb_vol_mult")
             vol_baseline = st.radio("Baseline", ["median", "mean"],
                                     index=0 if DEFAULT_CFG["vol_baseline"] == "median" else 1,
-                                    horizontal=True)
+                                    horizontal=True, key="sb_vol_baseline")
             vol_obv_enable = st.checkbox("Also require OBV rising",
-                                         DEFAULT_CFG["vol_obv_enable"])
-            vol_obv_len = st.slider("OBV slope length", 5, 60, DEFAULT_CFG["vol_obv_len"])
+                                         DEFAULT_CFG["vol_obv_enable"], key="sb_vol_obv_enable")
+            vol_obv_len = st.slider("OBV slope length", 5, 60, DEFAULT_CFG["vol_obv_len"], key="sb_vol_obv_len")
 
             st.markdown("---")
             st.markdown("**F · ΔZ acceleration, tightened**")
             st.caption("Defaults reproduce the old bare '> 0, either indicator' test.")
             dz_require_both = st.checkbox("Require BOTH oscillators accelerating",
-                                          DEFAULT_CFG["dz_accel_require_both"])
+                                          DEFAULT_CFG["dz_accel_require_both"], key="sb_dz_require_both")
             dz_accel_min = st.slider("Acceleration floor", 0.0, 1.0,
-                                     DEFAULT_CFG["dz_accel_min"], 0.02)
+                                     DEFAULT_CFG["dz_accel_min"], 0.02, key="sb_dz_accel_min")
             dz_accel_consec = st.slider("Consecutive rising ΔZ bars", 1, 6,
-                                        DEFAULT_CFG["dz_accel_consec"])
+                                        DEFAULT_CFG["dz_accel_consec"], key="sb_dz_accel_consec")
 
             st.markdown("---")
             st.markdown("**G · RSI floor (the falling-knife filter)**")
             rsi_floor_enable = st.checkbox(
                 "Put a floor under RSI", DEFAULT_CFG["rsi_floor_enable"],
                 help="rsi_hard_max caps the top at 50 but nothing capped the "
-                     "bottom, so RSI 12 passed cleanly."
-            )
+                     "bottom, so RSI 12 passed cleanly.", key="sb_rsi_floor_enable")
             rsi_hard_min = st.slider("RSI floor (>)", 5, 45,
-                                     int(DEFAULT_CFG["rsi_hard_min"]))
+                                     int(DEFAULT_CFG["rsi_hard_min"]), key="sb_rsi_hard_min")
             rsi_reclaim_enable = st.checkbox(
                 "Stronger: require RSI to RECLAIM the level",
                 DEFAULT_CFG["rsi_reclaim_enable"],
                 help="RSI must be above the level now AND have been below it "
-                     "recently — turning up, not sitting in the basement."
-            )
+                     "recently — turning up, not sitting in the basement.", key="sb_rsi_reclaim_enable")
             rsi_reclaim_level = st.slider("Reclaim level", 15, 50,
-                                          int(DEFAULT_CFG["rsi_reclaim_level"]))
+                                          int(DEFAULT_CFG["rsi_reclaim_level"]), key="sb_rsi_reclaim_level")
             rsi_reclaim_lookback = st.slider("Reclaim lookback (bars)", 3, 30,
-                                             DEFAULT_CFG["rsi_reclaim_lookback"])
+                                             DEFAULT_CFG["rsi_reclaim_lookback"], key="sb_rsi_reclaim_lookback")
 
         with st.expander("🎯 v2.0 — Structure, Ranking & CAPE (I · J · K)"):
             st.markdown("**I · Distance to support**")
             support_enable = st.checkbox(
                 "Require price near structural support", DEFAULT_CFG["support_enable"],
-                help="Entries near structure resolve faster and stop cleaner."
-            )
+                help="Entries near structure resolve faster and stop cleaner.", key="sb_support_enable")
             support_mode = st.radio("Support definition", ["either", "swing", "donchian"],
                                     index=["either", "swing", "donchian"].index(
                                         DEFAULT_CFG["support_mode"]),
-                                    horizontal=True)
+                                    horizontal=True, key="sb_support_mode")
             support_lookback = st.slider("Support lookback (bars)", 10, 200,
-                                         DEFAULT_CFG["support_lookback"], 5)
+                                         DEFAULT_CFG["support_lookback"], 5, key="sb_support_lookback")
             support_max_dist = st.slider("Max % above support", 1.0, 25.0,
-                                         DEFAULT_CFG["support_max_dist_pct"], 0.5)
+                                         DEFAULT_CFG["support_max_dist_pct"], 0.5, key="sb_support_max_dist")
             support_min_dist = st.slider("Tolerance below support (%)", -15.0, 0.0,
-                                         DEFAULT_CFG["support_min_dist_pct"], 0.5)
+                                         DEFAULT_CFG["support_min_dist_pct"], 0.5, key="sb_support_min_dist")
 
             st.markdown("---")
             st.markdown("**J · Cross-sectional ranking**")
@@ -3116,16 +3119,15 @@ def render_sidebar() -> Dict[str, Any]:
                 "Rank the universe instead of using a fixed threshold",
                 DEFAULT_CFG["rank_enable"],
                 help="min_composite is absolute, so a selloff gives you 200 "
-                     "candidates and a rally gives you none."
-            )
+                     "candidates and a rally gives you none.", key="sb_rank_enable")
             rank_mode = st.radio("Ranking mode", ["percentile", "topn"],
                                  index=0 if DEFAULT_CFG["rank_mode"] == "percentile" else 1,
-                                 horizontal=True)
+                                 horizontal=True, key="sb_rank_mode")
             rank_pct = st.slider("Keep best % per timeframe", 1.0, 50.0,
-                                 DEFAULT_CFG["rank_pct"], 1.0)
-            rank_top_n = st.slider("Or keep top N", 5, 100, DEFAULT_CFG["rank_top_n"], 5)
+                                 DEFAULT_CFG["rank_pct"], 1.0, key="sb_rank_pct")
+            rank_top_n = st.slider("Or keep top N", 5, 100, DEFAULT_CFG["rank_top_n"], 5, key="sb_rank_top_n")
             rank_within_tf = st.checkbox("Rank within each timeframe separately",
-                                         DEFAULT_CFG["rank_within_tf"])
+                                         DEFAULT_CFG["rank_within_tf"], key="sb_rank_within_tf")
 
             st.markdown("---")
             st.markdown("**K · CAPE treatment**")
@@ -3136,23 +3138,20 @@ def render_sidebar() -> Dict[str, Any]:
                 help="weight = v1.8 behaviour (a third of the score). "
                      "gate = CAPE only vetoes the expensive tail and carries "
                      "no weight. A multi-year valuation measure timing a "
-                     "multi-week trade is arguably better as a veto."
-            )
+                     "multi-week trade is arguably better as a veto.", key="sb_cape_mode")
             cape_gate_min_z = st.slider("Gate: minimum CAPE z (higher = cheaper)",
-                                        -3.0, 2.0, DEFAULT_CFG["cape_gate_min_z"], 0.1)
+                                        -3.0, 2.0, DEFAULT_CFG["cape_gate_min_z"], 0.1, key="sb_cape_gate_min_z")
             cape_daily_scale = st.slider(
                 "Scale CAPE weight on DAILY only (×)", 0.0, 1.0,
                 DEFAULT_CFG["cape_daily_scale"], 0.05,
                 help="CAPE penalises exactly the re-rating names that move "
-                     "fastest. 1.0 = unchanged."
-            )
+                     "fastest. 1.0 = unchanged.", key="sb_cape_daily_scale")
             add_conf_cape_min = st.slider(
                 "Add_Conf CAPE cutoff (was hardcoded 1.73)", -1.0, 3.0,
                 DEFAULT_CFG["add_conf_cape_min"], 0.01,
                 help="This bare number sat inside _add_conf() with no config "
                      "entry and no sidebar control, silently rejecting any "
-                     "CAPE-active candidate outside the cheapest sliver."
-            )
+                     "CAPE-active candidate outside the cheapest sliver.", key="sb_add_conf_cape_min")
 
         with st.expander("💰 v2.0 — Scan Target & Stop Levels"):
             st.caption(
@@ -3161,14 +3160,14 @@ def render_sidebar() -> Dict[str, Any]:
                 "emits real levels."
             )
             scan_profit_pct = st.slider("Scan profit target (%)", 2.0, 30.0,
-                                        DEFAULT_CFG["scan_profit_pct"], 0.5)
+                                        DEFAULT_CFG["scan_profit_pct"], 0.5, key="sb_scan_profit_pct")
             scan_stop_mode = st.radio("Scan stop mode", ["pct", "atr"],
                                       index=0 if DEFAULT_CFG["scan_stop_mode"] == "pct" else 1,
-                                      horizontal=True)
+                                      horizontal=True, key="sb_scan_stop_mode")
             scan_stop_pct = st.slider("Scan stop (%)", 2.0, 25.0,
-                                      DEFAULT_CFG["scan_stop_pct"], 0.5)
+                                      DEFAULT_CFG["scan_stop_pct"], 0.5, key="sb_scan_stop_pct")
             scan_stop_atr_mult = st.slider("Scan stop (× ATR)", 0.5, 6.0,
-                                           DEFAULT_CFG["scan_stop_atr_mult"], 0.25)
+                                           DEFAULT_CFG["scan_stop_atr_mult"], 0.25, key="sb_scan_stop_atr_mult")
 
         with st.expander("🧪 v1.9 — Backtest Realism"):
             st.caption(
@@ -3180,32 +3179,28 @@ def render_sidebar() -> Dict[str, Any]:
             bt_apply_gates = st.checkbox(
                 "Apply live gates in backtest", DEFAULT_CFG["bt_apply_gates"],
                 help="v1.8 ignored Add_Conf / ΔZ_Accel / Hi52 / Candle in the "
-                     "backtest while the live scan filtered on all of them."
-            )
+                     "backtest while the live scan filtered on all of them.", key="sb_bt_apply_gates")
             bt_use_cape = st.checkbox(
                 "Include CAPE in backtest composite", DEFAULT_CFG["bt_use_cape"],
                 help="v1.8 dropped CAPE 'for simplicity' while it carried 33% "
-                     "of the live composite."
-            )
-            bt_stop_enable = st.checkbox("Stop-loss", DEFAULT_CFG["bt_stop_enable"])
+                     "of the live composite.", key="sb_bt_use_cape")
+            bt_stop_enable = st.checkbox("Stop-loss", DEFAULT_CFG["bt_stop_enable"], key="sb_bt_stop_enable")
             bt_stop_mode = st.radio(
                 "Stop mode", ["pct", "atr"],
                 index=0 if DEFAULT_CFG["bt_stop_mode"] == "pct" else 1,
-                horizontal=True
-            )
+                horizontal=True, key="sb_bt_stop_mode")
             bt_stop_pct = st.slider("Stop distance (%)", 2.0, 25.0,
-                                    DEFAULT_CFG["bt_stop_pct"], 0.5)
+                                    DEFAULT_CFG["bt_stop_pct"], 0.5, key="sb_bt_stop_pct")
             bt_stop_atr_mult = st.slider("Stop distance (× ATR)", 0.5, 6.0,
-                                         DEFAULT_CFG["bt_stop_atr_mult"], 0.25)
+                                         DEFAULT_CFG["bt_stop_atr_mult"], 0.25, key="sb_bt_stop_atr_mult")
             bt_max_hold = st.slider("Max hold (weeks)", 4, 104,
-                                    DEFAULT_CFG["bt_max_hold_wks"], 2)
+                                    DEFAULT_CFG["bt_max_hold_wks"], 2, key="sb_bt_max_hold")
             bt_hit_window = st.slider("'Fast hit' window (weeks)", 2, 26,
-                                      DEFAULT_CFG["bt_hit_window_wks"])
+                                      DEFAULT_CFG["bt_hit_window_wks"], key="sb_bt_hit_window")
             bt_entry_next_open = st.checkbox(
                 "Enter at next bar's open", DEFAULT_CFG["bt_entry_next_open"],
                 help="v1.8 entered at the signal bar's own close using a "
-                     "composite derived from that same close."
-            )
+                     "composite derived from that same close.", key="sb_bt_entry_next_open")
 
         with st.expander("📐 v1.9 — Weekly Z-Score Lengths"):
             st.caption(
@@ -3214,17 +3209,16 @@ def render_sidebar() -> Dict[str, Any]:
                 "z-scores spanned nearly all available data and barely adapted."
             )
             weekly_zlen_enable = st.checkbox("Separate weekly z-lengths",
-                                             DEFAULT_CFG["weekly_zlen_enable"])
+                                             DEFAULT_CFG["weekly_zlen_enable"], key="sb_weekly_zlen_enable")
             w_rsi_zlen = st.slider("Weekly RSI z-length", 26, 156,
-                                   DEFAULT_CFG["w_rsi_zlen"], 2)
+                                   DEFAULT_CFG["w_rsi_zlen"], 2, key="sb_w_rsi_zlen")
             w_macd_zlen = st.slider("Weekly MACD z-length", 26, 156,
-                                    DEFAULT_CFG["w_macd_zlen"], 2)
+                                    DEFAULT_CFG["w_macd_zlen"], 2, key="sb_w_macd_zlen")
             w_cape_zlen = st.slider("Weekly CAPE z-length", 52, 260,
-                                    DEFAULT_CFG["w_cape_zlen"], 4)
+                                    DEFAULT_CFG["w_cape_zlen"], 4, key="sb_w_cape_zlen")
             fetch_period = st.selectbox(
                 "Live scan history", ["3y", "5y", "10y"],
-                index=["3y", "5y", "10y"].index(DEFAULT_CFG["live_fetch_period"])
-            )
+                index=["3y", "5y", "10y"].index(DEFAULT_CFG["live_fetch_period"]), key="sb_fetch_period")
 
         st.markdown("---")
         st.markdown(f'📦 **Universe:** {len(ALL_SYMBOLS)} NSE stocks')
@@ -3559,24 +3553,21 @@ def main():
                         "⬇️ All Signals CSV",
                         df_all.to_csv(index=False),
                         file_name=f"VMS_AllSignals_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
-                        mime="text/csv",
-                    )
+                        mime="text/csv", key="mn_download_button_2")
                 with dl2:
                     if not df_buy_conf.empty:
                         st.download_button(
                             "⬇️ BUY Confluence CSV",
                             df_buy_conf.to_csv(index=False),
                             file_name=f"VMS_BUYConf_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
-                            mime="text/csv",
-                        )
+                            mime="text/csv", key="mn_download_button_3")
                 with dl3:
                     if not df_sell_conf.empty:
                         st.download_button(
                             "⬇️ SELL Confluence CSV",
                             df_sell_conf.to_csv(index=False),
                             file_name=f"VMS_SELLConf_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
-                            mime="text/csv",
-                        )
+                            mime="text/csv", key="mn_download_button_4")
                 with dl4:
                     if _REPORTLAB:
                         pdf_buf = generate_scan_pdf(df_buy, df_sell, df_buy_conf, df_sell_conf, df_div, ts_str)
@@ -3585,8 +3576,7 @@ def main():
                                 "⬇️ Full PDF Report",
                                 pdf_buf,
                                 file_name=f"VMS_Report_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
-                                mime="application/pdf",
-                            )
+                                mime="application/pdf", key="mn_download_button_5")
                     else:
                         st.caption("PDF unavailable — pip install reportlab")
 
@@ -3600,9 +3590,9 @@ def main():
         
         bc1, bc2, bc3 = st.columns(3)
         with bc1:
-            lookback_wks = st.slider("Lookback (weeks)", 52, 520, 260, 26)
+            lookback_wks = st.slider("Lookback (weeks)", 52, 520, 260, 26, key="mn_lookback_wks")
         with bc2:
-            profit_pct = st.slider("Profit target (%)", 4.0, 20.0, cfg["backtest_profit_pct"], 0.5)
+            profit_pct = st.slider("Profit target (%)", 4.0, 20.0, cfg["backtest_profit_pct"], 0.5, key="mn_profit_pct")
         with bc3:
             st.markdown("<br>", unsafe_allow_html=True)
             run_bt = st.button("🚀 Run Backtest", key="run_bt")
@@ -3714,8 +3704,7 @@ def main():
                     "⬇️ Backtest Trades CSV",
                     df_bt.to_csv(index=False),
                     file_name=f"VMS_Backtest_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
-                    mime="text/csv",
-                )
+                    mime="text/csv", key="mn_download_button")
     
     # ── TAB 3: FOCUS STOCK ────────────────────────────────────
     with tab_focus:
