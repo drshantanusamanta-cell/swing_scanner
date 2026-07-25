@@ -75,7 +75,7 @@ __author__ = "Dr Shantanu Samanta"
 __email__ = "dr.shantanu.samanta@gmail.com"
 __copyright__ = "Copyright © 2026 Dr Shantanu Samanta. All rights reserved."
 __license__ = "Proprietary"
-__version__ = "1.9"
+__version__ = "2.0"
 
 COPYRIGHT_LINE = "© 2026 Dr Shantanu Samanta · All rights reserved"
 
@@ -754,61 +754,125 @@ def _pivot_high(series: pd.Series, left: int, right: int) -> pd.Series:
     return result
 
 
-def detect_divergence(price: pd.Series, osc: pd.Series, name: str, c: Optional[Dict] = None) -> Dict[str, Any]:
-    """Detect price-oscillator divergences."""
+def divergence_flags_series(price: pd.Series, osc: pd.Series,
+                            c: Optional[Dict] = None) -> pd.DataFrame:
+    """
+    ITEM D — per-bar divergence flags.
+
+    v1.9 and earlier only ever evaluated divergence on the LAST bar,
+    and even then used the result solely to build a display string.
+    The flags never entered All_Gates or the composite, so the single
+    best "the turn is happening now" evidence in the dataset was
+    computed and thrown away.
+
+    This returns the flags for EVERY bar, which is what lets the
+    backtest test the divergence filter rather than just print it.
+
+    A pivot at position i is only treated as known from bar i + R
+    onward — pivots need R bars of confirmation, so using them any
+    earlier would be look-ahead bias.
+    """
     if c is None:
         c = st.session_state.get("cfg", DEFAULT_CFG)
-    
-    out = {"reg_bull": False, "hid_bull": False, "reg_bear": False, "hid_bear": False, "tag": ""}
-    
+
+    cols = ["reg_bull", "hid_bull", "reg_bear", "hid_bear"]
+    out = pd.DataFrame(False, index=price.index, columns=cols)
+
     if not c["div_enable"]:
         return out
-    
-    if len(price) < c["piv_left"] + c["piv_right"] + 10:
+
+    L, R, LB = int(c["piv_left"]), int(c["piv_right"]), int(c["div_lookback"])
+    n = len(price)
+    if n < L + R + 10:
         return out
-    
-    L, R, LB = c["piv_left"], c["piv_right"], c["div_lookback"]
+
     osc = osc.reindex(price.index)
-    
+
     p_lows = _pivot_low(price, L, R)
     p_highs = _pivot_high(price, L, R)
     o_lows = _pivot_low(osc, L, R)
     o_highs = _pivot_high(osc, L, R)
-    
-    last_idx = len(price) - 1
-    
-    # Bullish divergence
-    pl_positions = [i for i, v in enumerate(p_lows.values) if not np.isnan(v)]
-    if len(pl_positions) >= 2:
-        i_curr, i_prev = pl_positions[-1], pl_positions[-2]
-        if (last_idx - i_curr) <= LB and (i_curr - i_prev) <= LB:
-            p_curr = price.iloc[i_curr]
-            p_prev = price.iloc[i_prev]
-            o_curr = _nearest_pivot_value(o_lows, i_curr, R)
-            o_prev = _nearest_pivot_value(o_lows, i_prev, R)
-            
-            if o_curr is not None and o_prev is not None:
-                if p_curr < p_prev and o_curr > o_prev:
-                    out["reg_bull"] = True
-                elif p_curr > p_prev and o_curr < o_prev:
-                    out["hid_bull"] = True
-    
-    # Bearish divergence
-    ph_positions = [i for i, v in enumerate(p_highs.values) if not np.isnan(v)]
-    if len(ph_positions) >= 2:
-        i_curr, i_prev = ph_positions[-1], ph_positions[-2]
-        if (last_idx - i_curr) <= LB and (i_curr - i_prev) <= LB:
-            p_curr = price.iloc[i_curr]
-            p_prev = price.iloc[i_prev]
-            o_curr = _nearest_pivot_value(o_highs, i_curr, R)
-            o_prev = _nearest_pivot_value(o_highs, i_prev, R)
-            
-            if o_curr is not None and o_prev is not None:
-                if p_curr > p_prev and o_curr < o_prev:
-                    out["reg_bear"] = True
-                elif p_curr < p_prev and o_curr > o_prev:
-                    out["hid_bear"] = True
-    
+
+    pl_pos = [i for i, v in enumerate(p_lows.values) if not np.isnan(v)]
+    ph_pos = [i for i, v in enumerate(p_highs.values) if not np.isnan(v)]
+
+    pvals = price.values
+    reg_bull = np.zeros(n, dtype=bool)
+    hid_bull = np.zeros(n, dtype=bool)
+    reg_bear = np.zeros(n, dtype=bool)
+    hid_bear = np.zeros(n, dtype=bool)
+
+    # Confirmation bar for each pivot = pivot position + R
+    pl_conf = [i + R for i in pl_pos]
+    ph_conf = [i + R for i in ph_pos]
+
+    import bisect
+
+    for t in range(n):
+        # ── Bullish: compare the two most recent CONFIRMED price lows
+        k = bisect.bisect_right(pl_conf, t)
+        if k >= 2:
+            i_curr, i_prev = pl_pos[k - 1], pl_pos[k - 2]
+            if (t - i_curr) <= LB and (i_curr - i_prev) <= LB:
+                o_curr = _nearest_pivot_value(o_lows, i_curr, R)
+                o_prev = _nearest_pivot_value(o_lows, i_prev, R)
+                if o_curr is not None and o_prev is not None:
+                    p_curr, p_prev = pvals[i_curr], pvals[i_prev]
+                    # Price made a LOWER low but the oscillator did not
+                    if p_curr < p_prev and o_curr > o_prev:
+                        reg_bull[t] = True
+                    elif p_curr > p_prev and o_curr < o_prev:
+                        hid_bull[t] = True
+
+        # ── Bearish: same logic on highs
+        k = bisect.bisect_right(ph_conf, t)
+        if k >= 2:
+            i_curr, i_prev = ph_pos[k - 1], ph_pos[k - 2]
+            if (t - i_curr) <= LB and (i_curr - i_prev) <= LB:
+                o_curr = _nearest_pivot_value(o_highs, i_curr, R)
+                o_prev = _nearest_pivot_value(o_highs, i_prev, R)
+                if o_curr is not None and o_prev is not None:
+                    p_curr, p_prev = pvals[i_curr], pvals[i_prev]
+                    if p_curr > p_prev and o_curr < o_prev:
+                        reg_bear[t] = True
+                    elif p_curr < p_prev and o_curr > o_prev:
+                        hid_bear[t] = True
+
+    out["reg_bull"] = reg_bull
+    out["hid_bull"] = hid_bull
+    out["reg_bear"] = reg_bear
+    out["hid_bear"] = hid_bear
+    return out
+
+
+def detect_divergence(price: pd.Series, osc: pd.Series, name: str,
+                      c: Optional[Dict] = None) -> Dict[str, Any]:
+    """
+    Last-bar divergence state plus a display tag.
+
+    v2.0: delegates to divergence_flags_series() so the value used by
+    the live scan and the value tested by the backtest cannot drift
+    apart.
+    """
+    if c is None:
+        c = st.session_state.get("cfg", DEFAULT_CFG)
+
+    out = {"reg_bull": False, "hid_bull": False,
+           "reg_bear": False, "hid_bear": False, "tag": ""}
+
+    if not c["div_enable"] or len(price) == 0:
+        return out
+
+    flags = divergence_flags_series(price, osc, c)
+    if flags.empty:
+        return out
+
+    last = flags.iloc[-1]
+    out["reg_bull"] = bool(last["reg_bull"])
+    out["hid_bull"] = bool(last["hid_bull"])
+    out["reg_bear"] = bool(last["reg_bear"])
+    out["hid_bear"] = bool(last["hid_bear"])
+
     parts = []
     if out["reg_bull"]:
         parts.append(f"BullReg({name})")
@@ -818,7 +882,7 @@ def detect_divergence(price: pd.Series, osc: pd.Series, name: str, c: Optional[D
         parts.append(f"BearReg({name})")
     if out["hid_bear"]:
         parts.append(f"BearHid({name})")
-    
+
     out["tag"] = " | ".join(parts)
     return out
 
@@ -898,20 +962,35 @@ def _tf_cfg(c: Dict[str, Any], tf: str) -> Dict[str, Any]:
     min_bars = 100 + 26 + 30 = 156 weeks ≈ 3 years — exactly the
     fetch window. The weekly z-scores were therefore computed over
     almost the whole available history and barely adapted to regime.
+
+    v2.0: idempotent (the marker key prevents a second application
+    from halving the bar counts again) and additionally applies K's
+    CAPE weight scaling on the Daily timeframe.
     """
-    if tf != "Weekly" or not c.get("weekly_zlen_enable", True):
+    if c.get("_tf_applied"):
         return c
 
-    return {
-        **c,
-        "rsi_zlen": c["w_rsi_zlen"],
-        "macd_zlen": c["w_macd_zlen"],
-        "cape_zlen": c["w_cape_zlen"],
-        "hi52_bars": max(20, int(c["hi52_bars"] / 5)),      # 252d ≈ 52w
-        "div_lookback": max(10, int(c["div_lookback"] / 5)),
-        "regime_ma_len": c["regime_ma_len_weekly"],
-        "atr_len": c["atr_len"],
-    }
+    if tf == "Weekly" and c.get("weekly_zlen_enable", True):
+        return {
+            **c,
+            "_tf_applied": tf,
+            "rsi_zlen": c["w_rsi_zlen"],
+            "macd_zlen": c["w_macd_zlen"],
+            "cape_zlen": c["w_cape_zlen"],
+            "hi52_bars": max(20, int(c["hi52_bars"] / 5)),      # 252d ≈ 52w
+            "div_lookback": max(10, int(c["div_lookback"] / 5)),
+            "support_lookback": max(10, int(c["support_lookback"] / 5)),
+            "regime_ma_len": c["regime_ma_len_weekly"],
+            "atr_len": c["atr_len"],
+        }
+
+    # ── K: CAPE is a multi-year valuation measure being asked to
+    #      time a multi-week trade. Scaling its weight down on the
+    #      daily timeframe stops it dominating fast setups.
+    out = {**c, "_tf_applied": tf, "regime_ma_len": c["regime_ma_len_daily"]}
+    if tf == "Daily" and c.get("cape_daily_scale", 1.0) != 1.0:
+        out["wt_cape"] = c["wt_cape"] * float(c["cape_daily_scale"])
+    return out
 
 
 def _atr(high: pd.Series, low: pd.Series, close: pd.Series, n: int) -> pd.Series:
@@ -1094,6 +1173,236 @@ def _cross_ok(bars_since: Optional[int], c: Optional[Dict] = None) -> bool:
     return bars_since <= int(c["cross_max_bars"])
 
 
+# ══════════════════════════════════════════════════════════════
+# v2.0 HELPERS — ITEMS D · E · F · G · I · K
+# ══════════════════════════════════════════════════════════════
+
+# ── D · DIVERGENCE, ACTUALLY USED ─────────────────────────────
+
+def _div_side(flags: Dict[str, Any], c: Dict[str, Any], side: str) -> bool:
+    """Is there a divergence supporting `side` ('bull' or 'bear')?"""
+    if not flags:
+        return False
+    if side == "bull":
+        return bool(flags.get("reg_bull") or
+                    (not c.get("div_regular_only", True) and flags.get("hid_bull")))
+    return bool(flags.get("reg_bear") or
+                (not c.get("div_regular_only", True) and flags.get("hid_bear")))
+
+
+def _div_bonus_value(sig: Dict[str, Any], c: Optional[Dict] = None) -> float:
+    """
+    ITEM D, bonus mode — a signed nudge to the composite.
+
+    Bullish divergence pushes the score up, bearish pushes it down,
+    once per divergent oscillator (so RSI *and* MACD agreeing is
+    worth double, which is the intent).
+    """
+    if c is None:
+        c = st.session_state.get("cfg", DEFAULT_CFG)
+
+    if not c.get("div_use_enable", False) or c.get("div_mode", "bonus") != "bonus":
+        return 0.0
+
+    b = 0.0
+    for key in ("div_rsi", "div_macd"):
+        f = sig.get(key) or {}
+        if _div_side(f, c, "bull"):
+            b += float(c["div_bonus"])
+        if _div_side(f, c, "bear"):
+            b -= float(c["div_bonus"])
+    return b
+
+
+def _div_gate_ok(sig: Dict[str, Any], direction: int,
+                 c: Optional[Dict] = None) -> bool:
+    """
+    ITEM D, gate mode — refuse the trade unless divergence agrees
+    with the signal direction.
+    """
+    if c is None:
+        c = st.session_state.get("cfg", DEFAULT_CFG)
+
+    if not c.get("div_use_enable", False) or c.get("div_mode", "bonus") != "gate":
+        return True
+
+    side = "bull" if direction > 0 else "bear"
+    hits = sum(1 for key in ("div_rsi", "div_macd")
+               if _div_side(sig.get(key) or {}, c, side))
+
+    return hits >= (2 if c.get("div_gate_require_both", False) else 1)
+
+
+# ── E · VOLUME (loaded since v1.8, never used until now) ──────
+
+def _obv(close: pd.Series, volume: pd.Series) -> pd.Series:
+    """On-Balance Volume — cumulative signed volume. Pure OHLCV."""
+    sign = np.sign(close.diff().fillna(0.0))
+    return (sign * volume.fillna(0.0)).cumsum()
+
+
+def _volume_ok_series(volume: pd.Series, close: pd.Series,
+                      c: Optional[Dict] = None) -> pd.Series:
+    """
+    ITEM E — require the turn to happen on expanding volume.
+
+    `volume` was read into a local variable in both compute_signals()
+    and _weekly_signal_frame() and then never referenced again. A turn
+    on heavy volume is a turn somebody participated in; a turn on
+    apathetic volume tends to drift.
+    """
+    if c is None:
+        c = st.session_state.get("cfg", DEFAULT_CFG)
+
+    if not c.get("vol_enable", False):
+        return pd.Series(True, index=volume.index)
+
+    n = int(c["vol_len"])
+    roll = volume.rolling(n, min_periods=max(5, n // 2))
+    base = roll.median() if c.get("vol_baseline", "median") == "median" else roll.mean()
+
+    ok = (volume / base.replace(0, np.nan)) >= float(c["vol_mult"])
+
+    if c.get("vol_obv_enable", False):
+        obv = _obv(close, volume)
+        ok = ok & (obv.diff(int(c["vol_obv_len"])) > 0)
+
+    return ok.fillna(False)
+
+
+def _volume_ratio_series(volume: pd.Series, c: Optional[Dict] = None) -> pd.Series:
+    """Bar volume as a multiple of its own rolling baseline (for display)."""
+    if c is None:
+        c = st.session_state.get("cfg", DEFAULT_CFG)
+
+    n = int(c["vol_len"])
+    roll = volume.rolling(n, min_periods=max(5, n // 2))
+    base = roll.median() if c.get("vol_baseline", "median") == "median" else roll.mean()
+    return volume / base.replace(0, np.nan)
+
+
+# ── F · ΔZ ACCELERATION, TIGHTENED ────────────────────────────
+
+def _consec_rising(s: pd.Series) -> pd.Series:
+    """Length of the current run of consecutive rising bars."""
+    up = s.diff() > 0
+    grp = (~up).cumsum()
+    return up.groupby(grp).cumsum()
+
+
+# ── G · RSI FLOOR / RECLAIM (the falling-knife filter) ────────
+
+def _rsi_floor_ok_series(rsi: pd.Series, c: Optional[Dict] = None) -> pd.Series:
+    """
+    ITEM G — put a floor under RSI.
+
+    rsi_hard_max caps the top at 50, but nothing capped the bottom,
+    so an RSI of 12 passed cleanly. In a fully contrarian system that
+    is exactly the falling-knife case.
+
+    Reclaim mode is the stronger version: RSI must currently be above
+    the level AND have been below it recently, i.e. it is turning up
+    through the level rather than sitting in the basement.
+    """
+    if c is None:
+        c = st.session_state.get("cfg", DEFAULT_CFG)
+
+    if not c.get("rsi_floor_enable", False):
+        return pd.Series(True, index=rsi.index)
+
+    ok = rsi >= float(c["rsi_hard_min"])
+
+    if c.get("rsi_reclaim_enable", False):
+        lvl = float(c["rsi_reclaim_level"])
+        lb = int(c["rsi_reclaim_lookback"])
+        was_below = (rsi < lvl).shift(1).rolling(lb, min_periods=1).max().fillna(0).astype(bool)
+        ok = ok & (rsi >= lvl) & was_below
+
+    return ok.fillna(False)
+
+
+# ── I · DISTANCE TO STRUCTURAL SUPPORT ────────────────────────
+
+def _support_level_series(low: pd.Series, c: Optional[Dict] = None) -> pd.Series:
+    """
+    Nearest support beneath price, from existing OHLC only.
+
+    swing     — most recent confirmed pivot low, shifted by piv_right
+                so it is only used once actually confirmed
+    donchian  — rolling N-bar low
+    either    — whichever sits HIGHER, i.e. nearer to price
+    """
+    if c is None:
+        c = st.session_state.get("cfg", DEFAULT_CFG)
+
+    lb = int(c["support_lookback"])
+    mode = c.get("support_mode", "either")
+
+    donch = low.rolling(lb, min_periods=max(5, lb // 4)).min()
+    swing = _pivot_low(low, int(c["piv_left"]), int(c["piv_right"])) \
+        .shift(int(c["piv_right"])).ffill()
+
+    if mode == "donchian":
+        return donch
+    if mode == "swing":
+        return swing
+    return pd.concat([donch, swing], axis=1).max(axis=1)
+
+
+def _support_ok_series(low: pd.Series, close: pd.Series,
+                       c: Optional[Dict] = None) -> Tuple[pd.Series, pd.Series]:
+    """
+    ITEM I — entries near structure resolve faster and stop cleaner.
+
+    Returns (ok_series, distance_pct_series). Distance is positive when
+    price sits above support; the negative floor allows a little
+    tolerance for price probing just underneath.
+    """
+    if c is None:
+        c = st.session_state.get("cfg", DEFAULT_CFG)
+
+    sup = _support_level_series(low, c)
+    dist = (close - sup) / close.replace(0, np.nan) * 100.0
+
+    if not c.get("support_enable", False):
+        return pd.Series(True, index=close.index), dist
+
+    ok = (dist >= float(c["support_min_dist_pct"])) & \
+         (dist <= float(c["support_max_dist_pct"]))
+    return ok.fillna(False), dist
+
+
+# ── K · CAPE AS A GATE RATHER THAN A THIRD OF THE SCORE ───────
+
+def _cape_gate_ok(cape_z: Optional[float], cape_used: bool,
+                  c: Optional[Dict] = None) -> bool:
+    """
+    ITEM K — CAPE is a multi-year valuation measure being asked to
+    time a multi-week trade, and at 33% weight it penalises exactly
+    the re-rating names that move fastest. Gate mode keeps CAPE as a
+    veto on the expensive tail without letting it dominate the score.
+
+    Note cape_z is already sign-flipped when cape_bearish is set, so a
+    HIGH cape_z means CHEAP.
+    """
+    if c is None:
+        c = st.session_state.get("cfg", DEFAULT_CFG)
+
+    if c.get("cape_mode", "weight") not in ("gate", "both"):
+        return True
+    if not cape_used or cape_z is None:
+        return True
+
+    return float(cape_z) >= float(c["cape_gate_min_z"])
+
+
+def _effective_cape_weight(c: Dict[str, Any]) -> float:
+    """In pure gate mode CAPE carries no weight in the composite."""
+    if c.get("cape_mode", "weight") == "gate":
+        return 0.0
+    return float(c["wt_cape"])
+
+
 def compute_signals(df: pd.DataFrame, c: Optional[Dict] = None,
                     tf: str = "Daily") -> Optional[Dict[str, Any]]:
     """Compute RSI, MACD, and momentum signals."""
@@ -1140,9 +1449,29 @@ def compute_signals(df: pd.DataFrame, c: Optional[Dict] = None,
     atr_pct_s = _atr_pct_series(high, low, close, c)
     regime_s = _regime_ok_series(close, c, tf)
 
+    # ── v2.0: E volume · F streaks · G RSI floor · I support ──
+    vol_ok_s = _volume_ok_series(volume, close, c)
+    vol_ratio_s = _volume_ratio_series(volume, c)
+    rsi_floor_s = _rsi_floor_ok_series(rsi_val, c)
+    support_ok_s, support_dist_s = _support_ok_series(low, close, c)
+    rsi_streak_s = _consec_rising(rsi_dz)
+    macd_streak_s = _consec_rising(macd_dz)
+
     def _f(s: pd.Series) -> Optional[float]:
         v = s.iloc[-1]
         return round(float(v), 3) if not (np.isnan(v) or np.isinf(v)) else None
+
+    def _b(s: pd.Series, default: bool = True) -> bool:
+        if len(s) == 0:
+            return default
+        v = s.iloc[-1]
+        return default if pd.isna(v) else bool(v)
+
+    def _i(s: pd.Series) -> Optional[int]:
+        if len(s) == 0:
+            return None
+        v = s.iloc[-1]
+        return None if pd.isna(v) else int(v)
 
     return {
         "close": round(float(close.iloc[-1]), 2),
@@ -1159,7 +1488,15 @@ def compute_signals(df: pd.DataFrame, c: Optional[Dict] = None,
         # ── v1.9 ────────────────────────────────────────────
         "hi52_ratio": _f(hi52_ratio_s),
         "atr_pct": _f(atr_pct_s),
-        "regime_pass": bool(regime_s.iloc[-1]) if len(regime_s) else True,
+        "regime_pass": _b(regime_s),
+        # ── v2.0 ────────────────────────────────────────────
+        "vol_pass": _b(vol_ok_s),
+        "vol_ratio": _f(vol_ratio_s),
+        "rsi_floor_pass": _b(rsi_floor_s),
+        "support_pass": _b(support_ok_s),
+        "support_dist": _f(support_dist_s),
+        "rsi_dz_streak": _i(rsi_streak_s),
+        "macd_dz_streak": _i(macd_streak_s),
         # series kept for cross detection in scan_stock — never written
         # into result rows, so the exported tables are unchanged.
         "_rsi_z_s": rsi_z,
@@ -1175,19 +1512,27 @@ def _composite(sig: Dict[str, Any], cape_z: Optional[float], c: Optional[Dict] =
     
     rz = sig.get("rsi_z")
     mz = sig.get("macd_z")
-    
+
     if any(z is None for z in [rz, mz]):
         return None, False
-    
-    cape_active = cape_z is not None and c["use_cape"]
-    
+
+    # ── K: in pure gate mode CAPE vetoes but does not score ───
+    wt_cape = _effective_cape_weight(c)
+    cape_active = cape_z is not None and c["use_cape"] and wt_cape > 0
+
     if cape_active:
-        tot = c["wt_cape"] + c["wt_rsi"] + c["wt_macd"]
-        raw = (cape_z * c["wt_cape"] + rz * c["wt_rsi"] + mz * c["wt_macd"]) / tot
+        tot = wt_cape + c["wt_rsi"] + c["wt_macd"]
+        raw = (cape_z * wt_cape + rz * c["wt_rsi"] + mz * c["wt_macd"]) / tot
     else:
         tot = c["wt_rsi"] + c["wt_macd"]
         raw = (rz * c["wt_rsi"] + mz * c["wt_macd"]) / tot
-    
+
+    if tot <= 0:
+        return None, False
+
+    # ── D: divergence nudges the score in its own direction ───
+    raw += _div_bonus_value(sig, c)
+
     clamped = float(_clamp(pd.Series([raw]), c["clamp_val"]).iloc[0])
     return round(clamped, 3), cape_active
 
@@ -1249,29 +1594,61 @@ def _add_conf(cape_z: Optional[float], cape_used: bool, rsi_val: Optional[float]
     if agree <= c["add_conf_agree_min"]:
         return False
     if cape_used and cape_z is not None:
-        if float(cape_z) <= 1.73:
+        # ITEM K — this cutoff was hardcoded as a bare 1.73 in v1.8/v1.9.
+        # It was neither in DEFAULT_CFG nor exposed in the sidebar, so it
+        # silently rejected any CAPE-active candidate that was not in the
+        # cheapest sliver. Now tunable, default unchanged at 1.73.
+        if float(cape_z) <= float(c.get("add_conf_cape_min", 1.73)):
             return False
-    
+
     return True
 
 
 def _dz_accel_ok(sig: Dict[str, Any], c: Optional[Dict] = None) -> bool:
-    """Check ΔZ acceleration filter."""
+    """
+    ΔZ acceleration filter.
+
+    ITEM F — v1.8/v1.9 used `require_both = False` with a bare `> 0`
+    test, so a single indicator ticking up by any amount at all was
+    enough to pass. Three knobs now tighten it:
+
+        dz_accel_require_both — both oscillators must be accelerating
+        dz_accel_min          — magnitude floor, not just "> 0"
+        dz_accel_consec       — N consecutive rising ΔZ bars
+
+    Defaults (False / 0.0 / 1) reproduce the old behaviour exactly, so
+    this is opt-in tightening rather than a silent change.
+    """
     if c is None:
         c = st.session_state.get("cfg", DEFAULT_CFG)
-    
+
     if not c["dz_accel_enable"]:
         return True
-    
+
     rsi_acc = sig.get("rsi_dz_accel")
     macd_acc = sig.get("macd_dz_accel")
-    
+
     if rsi_acc is None and macd_acc is None:
         return True
-    
-    rsi_ok = (rsi_acc is None) or (float(rsi_acc) > 0)
-    macd_ok = (macd_acc is None) or (float(macd_acc) > 0)
-    
+
+    thr = float(c.get("dz_accel_min", 0.0))
+    need_streak = int(c.get("dz_accel_consec", 1))
+
+    def _leg(acc, streak) -> bool:
+        if acc is None:
+            return True
+        if float(acc) <= thr:
+            return False
+        # Only applied when explicitly asked for, so the default path
+        # is byte-for-byte the old test.
+        if need_streak > 1:
+            if streak is None or int(streak) < need_streak:
+                return False
+        return True
+
+    rsi_ok = _leg(rsi_acc, sig.get("rsi_dz_streak"))
+    macd_ok = _leg(macd_acc, sig.get("macd_dz_streak"))
+
     if c.get("dz_accel_require_both", False):
         return rsi_ok and macd_ok
     return rsi_ok or macd_ok
@@ -1294,6 +1671,92 @@ def _candle_ok(open_price: float, high_price: float, low_price: float, close_pri
     if c.get("candle_body_hard", False):
         return qualifies
     return True
+
+
+# ══════════════════════════════════════════════════════════════
+# ITEM J — CROSS-SECTIONAL RANKING
+# ══════════════════════════════════════════════════════════════
+
+def apply_cross_sectional_rank(df: pd.DataFrame,
+                               c: Optional[Dict] = None) -> pd.DataFrame:
+    """
+    ITEM J — rank the universe against itself instead of against a
+    fixed number.
+
+    `min_composite` is an absolute z-score. In a broad selloff nearly
+    everything clears 1.0 and you get 200 candidates; in a melt-up
+    nothing clears it and you get none. Neither is a decision you
+    actually made. Ranking fixes the *candidate count* and lets the
+    threshold float with the market.
+
+    Adds three columns and leaves everything else untouched:
+        Rank      — 1 = best in its group
+        Pctile    — percentile within the group (lower = better)
+        Rank_OK   — survives the ranking cut
+        Final_OK  — All_Gates AND Rank_OK
+
+    NOTE: this is inherently cross-sectional, so it applies to the live
+    scan only. The backtest runs one symbol at a time and has no view
+    of the rest of the universe on a given historical date, so ranking
+    cannot be validated there. Treat it as a portfolio-construction
+    rule, not a signal you have backtested.
+    """
+    if c is None:
+        c = st.session_state.get("cfg", DEFAULT_CFG)
+
+    if df is None or df.empty:
+        return df
+
+    out = df.copy()
+    out["Rank"] = np.nan
+    out["Pctile"] = np.nan
+    out["Rank_OK"] = "YES"
+
+    side = out["Signal"].astype(str).map(
+        lambda s: "BUY" if "BUY" in s else ("SELL" if "SELL" in s else "NEUTRAL")
+    )
+    actionable = side != "NEUTRAL"
+
+    if not c.get("rank_enable", False):
+        # A NEUTRAL row is not a trade, so it is never Final_OK — even
+        # though the direction-agnostic gates may all read YES.
+        out["Rank_OK"] = np.where(actionable, "YES", "N/A")
+        out["Final_OK"] = np.where(
+            actionable & (out.get("All_Gates", "NO") == "YES"), "YES", "NO")
+        return out
+
+    out["_Side"] = side
+    out["Rank_OK"] = np.where(actionable, "YES", "N/A")
+
+    group_keys = ["TF", "_Side"] if c.get("rank_within_tf", True) else ["_Side"]
+
+    for keys, g in out.groupby(group_keys, dropna=False):
+        sd = keys[-1] if isinstance(keys, tuple) else keys
+        if sd == "NEUTRAL":
+            continue
+
+        # BUY: highest composite ranks first. SELL: lowest ranks first.
+        r = g["Composite"].rank(ascending=(sd == "SELL"), method="min")
+        n = len(g)
+        pct = r / n * 100.0
+
+        if c.get("rank_mode", "percentile") == "topn":
+            ok = r <= int(c["rank_top_n"])
+        else:
+            ok = pct <= float(c["rank_pct"])
+
+        out.loc[g.index, "Rank"] = r
+        out.loc[g.index, "Pctile"] = pct.round(1)
+        out.loc[g.index, "Rank_OK"] = np.where(ok, "YES", "NO")
+
+    out = out.drop(columns=["_Side"])
+    out["Final_OK"] = np.where(
+        actionable
+        & (out.get("All_Gates", "NO") == "YES")
+        & (out["Rank_OK"] == "YES"),
+        "YES", "NO",
+    )
+    return out
 
 
 # ══════════════════════════════════════════════════════════════
@@ -1336,25 +1799,29 @@ def scan_stock(sym_raw: str, c: Optional[Dict] = None) -> Tuple[str, List[Dict[s
             if sig is None:
                 continue
 
-            comp, cape_used = _composite(sig, cape_z, c)
+            # Timeframe-specialised config (weekly z-lengths, K's CAPE
+            # daily scaling). Idempotent, so safe to build per row.
+            tfc = _tf_cfg(c, tf)
+
+            comp, cape_used = _composite(sig, cape_z, tfc)
             if comp is None:
                 continue
 
-            vrd = verdict(comp, c)
-            conf = confidence(comp, sig, cape_z, cape_used, c)
+            vrd = verdict(comp, tfc)
+            conf = confidence(comp, sig, cape_z, cape_used, tfc)
 
             _ac_zs = [sig["rsi_z"], sig["macd_z"]]
             if cape_used and cape_z is not None:
                 _ac_zs.append(cape_z)
             _ac_agree = sum(1 for z in _ac_zs if z is not None and float(z) > 0)
 
-            ac = _add_conf(cape_z, cape_used, sig["rsi_val"], _ac_agree, c)
-            dz_acc_ok = _dz_accel_ok(sig, c)
+            ac = _add_conf(cape_z, cape_used, sig["rsi_val"], _ac_agree, tfc)
+            dz_acc_ok = _dz_accel_ok(sig, tfc)
             hi52_ok = sig.get("hi52_pass", True)
 
             last = src_df.iloc[-1]
             candle_ok = _candle_ok(float(last["Open"]), float(last["High"]),
-                                   float(last["Low"]), float(last["Close"]), c)
+                                   float(last["Low"]), float(last["Close"]), tfc)
 
             # ══════════════════════════════════════════════════
             # v1.9 GATES
@@ -1362,37 +1829,36 @@ def scan_stock(sym_raw: str, c: Optional[Dict] = None) -> Tuple[str, List[Dict[s
 
             # ── A: trend regime ───────────────────────────────
             regime_ok = bool(sig.get("regime_pass", True))
-            regime_gate = regime_ok if (c.get("regime_enable", False)
-                                        and c.get("regime_hard", True)) else True
+            regime_gate = regime_ok if (tfc.get("regime_enable", False)
+                                        and tfc.get("regime_hard", True)) else True
 
             # ── H: is the target reachable in a sane number of ATRs?
             atr_pct = sig.get("atr_pct")
-            target_pct = _adaptive_target_pct(atr_pct, c["backtest_profit_pct"], c)
+            target_pct = _adaptive_target_pct(atr_pct, tfc["scan_profit_pct"], tfc)
             atr_ok = True
             atr_mult_needed = None
             if atr_pct and atr_pct > 0:
                 atr_mult_needed = round(target_pct / atr_pct, 2)
-                if c.get("atr_target_enable", False):
-                    atr_ok = atr_mult_needed <= c["atr_max_mult"]
-            elif c.get("atr_target_enable", False):
+                if tfc.get("atr_target_enable", False):
+                    atr_ok = atr_mult_needed <= tfc["atr_max_mult"]
+            elif tfc.get("atr_target_enable", False):
                 atr_ok = False
 
             # ── C: is this a fresh CROSS or a stale plateau? ──
             bars_since = None
-            if c.get("cross_enable", False) and vrd not in ("N/A", "NEUTRAL"):
-                _tfc = _tf_cfg(c, tf)
+            if tfc.get("cross_enable", False) and vrd not in ("N/A", "NEUTRAL"):
                 comp_s = _composite_series(sig["_rsi_z_s"], sig["_macd_z_s"],
-                                           cape_z_s, _tfc)
+                                           cape_z_s, tfc)
                 if "BUY" in vrd:
-                    thr = _tfc["th_sbuy"] if vrd == "STRONG BUY" else _tfc["th_buy"]
-                    bars_since = _bars_since_cross(comp_s, thr, +1, _tfc)
+                    thr = tfc["th_sbuy"] if vrd == "STRONG BUY" else tfc["th_buy"]
+                    bars_since = _bars_since_cross(comp_s, thr, +1, tfc)
                 else:
-                    thr = _tfc["th_ssell"] if vrd == "STRONG SELL" else _tfc["th_sell"]
-                    bars_since = _bars_since_cross(comp_s, thr, -1, _tfc)
+                    thr = tfc["th_ssell"] if vrd == "STRONG SELL" else tfc["th_sell"]
+                    bars_since = _bars_since_cross(comp_s, thr, -1, tfc)
 
-            cross_ok = _cross_ok(bars_since, c)
-            cross_gate = cross_ok if (c.get("cross_enable", False)
-                                      and c.get("cross_hard", True)) else True
+            cross_ok = _cross_ok(bars_since, tfc)
+            cross_gate = cross_ok if (tfc.get("cross_enable", False)
+                                      and tfc.get("cross_hard", True)) else True
 
             div_tags = []
             if sig.get("div_rsi", {}).get("tag"):
@@ -1401,8 +1867,30 @@ def scan_stock(sym_raw: str, c: Optional[Dict] = None) -> Tuple[str, List[Dict[s
                 div_tags.append(sig["div_macd"]["tag"])
             div_str = " | ".join(div_tags) if div_tags else ""
 
+            # ══════════════════════════════════════════════════
+            # v2.0 GATES — D · E · G · I · K
+            # ══════════════════════════════════════════════════
+            _dir = 1 if (comp or 0) > 0 else -1
+            div_ok = _div_gate_ok(sig, _dir, tfc)          # D
+            vol_ok = bool(sig.get("vol_pass", True))       # E
+            rsi_floor_ok = bool(sig.get("rsi_floor_pass", True))   # G
+            support_ok = bool(sig.get("support_pass", True))       # I
+            cape_gate_ok = _cape_gate_ok(cape_z, cape_used, tfc)   # K
+
             all_gates = (ac and dz_acc_ok and candle_ok and hi52_ok
-                         and regime_gate and atr_ok and cross_gate)
+                         and regime_gate and atr_ok and cross_gate
+                         and div_ok and vol_ok and rsi_floor_ok
+                         and support_ok and cape_gate_ok)
+
+            # ── Actual price levels (v1.9 gave a % but no price) ──
+            _close = sig["close"]
+            target_price = round(_close * (1 + target_pct / 100.0), 2)
+            if tfc.get("scan_stop_mode", "pct") == "atr" and atr_pct:
+                _stop_pct = atr_pct * float(tfc["scan_stop_atr_mult"])
+            else:
+                _stop_pct = float(tfc["scan_stop_pct"])
+            stop_price = round(_close * (1 - _stop_pct / 100.0), 2)
+            rr = round(target_pct / _stop_pct, 2) if _stop_pct > 0 else None
 
             rows.append({
                 "Symbol": sym_raw,
@@ -1420,8 +1908,21 @@ def scan_stock(sym_raw: str, c: Optional[Dict] = None) -> Tuple[str, List[Dict[s
                 "Bars_Since_Cross": bars_since,
                 "ATR_%": atr_pct,
                 "ATRs_To_Target": atr_mult_needed,
-                "Target_%": round(target_pct, 2),
                 "Hi52_Ratio": sig.get("hi52_ratio"),
+                # ── v2.0 gate columns (D · E · G · I · K) ────
+                "Div_OK": "YES" if div_ok else "NO",
+                "Vol_OK": "YES" if vol_ok else "NO",
+                "Vol_Ratio": sig.get("vol_ratio"),
+                "RSI_Floor_OK": "YES" if rsi_floor_ok else "NO",
+                "Support_OK": "YES" if support_ok else "NO",
+                "Support_Dist_%": sig.get("support_dist"),
+                "CAPE_Gate_OK": "YES" if cape_gate_ok else "NO",
+                # ── tradeable levels ─────────────────────────
+                "Target_%": round(target_pct, 2),
+                "Target_Price": target_price,
+                "Stop_%": round(_stop_pct, 2),
+                "Stop_Price": stop_price,
+                "R:R": rr,
                 # ─────────────────────────────────────────────
                 "All_Gates": "YES" if all_gates else "NO",
                 "Composite": comp,
@@ -1491,6 +1992,26 @@ def _weekly_signal_frame(df: pd.DataFrame, c: Dict[str, Any]) -> pd.DataFrame:
     atr_abs_s = _atr(high, low, close, c["atr_len"])
     regime_s = _regime_ok_series(close, c, "Weekly")
 
+    # ── v2.0 additions: D · E · F · G · I ─────────────────────
+    vol_ok_s = _volume_ok_series(volume, close, c)
+    vol_ratio_s = _volume_ratio_series(volume, c)
+    rsi_floor_s = _rsi_floor_ok_series(rsi_val, c)
+    support_ok_s, support_dist_s = _support_ok_series(low, close, c)
+    rsi_streak_s = _consec_rising(rsi_dz)
+    macd_streak_s = _consec_rising(macd_dz)
+
+    # Per-bar divergence, so the backtest can actually TEST item D
+    # rather than merely print it the way v1.8 and v1.9 did.
+    if c["div_enable"]:
+        rsi_lz_full = _zscore(rsi_val, c["rsi_zlen"])
+        div_r = divergence_flags_series(close, rsi_lz_full, c)
+        div_m = divergence_flags_series(close, macd_lz, c)
+    else:
+        _empty = pd.DataFrame(False, index=df.index,
+                              columns=["reg_bull", "hid_bull", "reg_bear", "hid_bear"])
+        div_r = _empty
+        div_m = _empty.copy()
+
     return pd.DataFrame({
         "rsi_z": rsi_z,
         "macd_z": macd_z,
@@ -1498,11 +2019,26 @@ def _weekly_signal_frame(df: pd.DataFrame, c: Dict[str, Any]) -> pd.DataFrame:
         "macd_dz": macd_dz,
         "rsi_dz_accel": rsi_dz_accel,
         "macd_dz_accel": macd_dz_accel,
+        "rsi_dz_streak": rsi_streak_s,
+        "macd_dz_streak": macd_streak_s,
         "hi52_ok": hi52_ok_s,
         "hi52_ratio": hi52_ratio_s,
         "atr_pct": atr_pct_s,
         "atr_abs": atr_abs_s,
         "regime_ok": regime_s,
+        "vol_ok": vol_ok_s,
+        "vol_ratio": vol_ratio_s,
+        "rsi_floor_ok": rsi_floor_s,
+        "support_ok": support_ok_s,
+        "support_dist": support_dist_s,
+        "div_r_reg_bull": div_r["reg_bull"],
+        "div_r_hid_bull": div_r["hid_bull"],
+        "div_r_reg_bear": div_r["reg_bear"],
+        "div_r_hid_bear": div_r["hid_bear"],
+        "div_m_reg_bull": div_m["reg_bull"],
+        "div_m_hid_bull": div_m["hid_bull"],
+        "div_m_reg_bear": div_m["reg_bear"],
+        "div_m_hid_bear": div_m["hid_bear"],
         "open": open_,
         "high": high,
         "low": low,
@@ -1599,9 +2135,25 @@ def backtest_one(sym_raw: str, lookback_weeks: int, profit_pct: float,
                 if not pd.isna(_cv):
                     cape_i = float(_cv)
 
-            if cape_i is not None:
-                tot = c["wt_cape"] + c["wt_rsi"] + c["wt_macd"]
-                comp_w = (cape_i * c["wt_cape"] + float(rz_w) * c["wt_rsi"]
+            # ── D: divergence flags AT THIS BAR ───────────────
+            div_rsi_i = {k: bool(sf[f"div_r_{k}"].iloc[i])
+                         for k in ("reg_bull", "hid_bull", "reg_bear", "hid_bear")}
+            div_macd_i = {k: bool(sf[f"div_m_{k}"].iloc[i])
+                          for k in ("reg_bull", "hid_bull", "reg_bear", "hid_bear")}
+
+            sig_w = {"rsi_z": float(rz_w), "macd_z": float(mz_w),
+                     "div_rsi": div_rsi_i, "div_macd": div_macd_i,
+                     "rsi_dz_streak": (None if pd.isna(sf["rsi_dz_streak"].iloc[i])
+                                       else int(sf["rsi_dz_streak"].iloc[i])),
+                     "macd_dz_streak": (None if pd.isna(sf["macd_dz_streak"].iloc[i])
+                                        else int(sf["macd_dz_streak"].iloc[i]))}
+
+            # ── K: gate mode gives CAPE zero weight in the score
+            wt_cape_eff = _effective_cape_weight(cw)
+
+            if cape_i is not None and wt_cape_eff > 0:
+                tot = wt_cape_eff + c["wt_rsi"] + c["wt_macd"]
+                comp_w = (cape_i * wt_cape_eff + float(rz_w) * c["wt_rsi"]
                           + float(mz_w) * c["wt_macd"]) / tot
                 cape_used_i = True
             else:
@@ -1611,6 +2163,9 @@ def backtest_one(sym_raw: str, lookback_weeks: int, profit_pct: float,
 
             if tot <= 0:
                 continue
+
+            # ── D: bonus mode nudges the composite ────────────
+            comp_w += _div_bonus_value(sig_w, cw)
             comp_w = float(np.clip(comp_w, -c["clamp_val"], c["clamp_val"]))
 
             if comp_w < c["bt_min_composite"]:
@@ -1620,7 +2175,6 @@ def backtest_one(sym_raw: str, lookback_weeks: int, profit_pct: float,
             if vrd_w not in ("BUY", "STRONG BUY"):
                 continue
 
-            sig_w = {"rsi_z": float(rz_w), "macd_z": float(mz_w)}
             conf_w = confidence(comp_w, sig_w, cape_i, cape_used_i, c)
 
             if conf_w not in ("MODERATE", "STRONG"):
@@ -1646,21 +2200,27 @@ def backtest_one(sym_raw: str, lookback_weeks: int, profit_pct: float,
 
             ac_i = _add_conf(cape_i, cape_used_i, rsi_i, _ac_agree, c)
 
-            _accel_sig = {
-                "rsi_dz_accel": (None if pd.isna(sf["rsi_dz_accel"].iloc[i])
-                                 else float(sf["rsi_dz_accel"].iloc[i])),
-                "macd_dz_accel": (None if pd.isna(sf["macd_dz_accel"].iloc[i])
-                                  else float(sf["macd_dz_accel"].iloc[i])),
-            }
-            dz_ok_i = _dz_accel_ok(_accel_sig, c)
+            sig_w["rsi_dz_accel"] = (None if pd.isna(sf["rsi_dz_accel"].iloc[i])
+                                     else float(sf["rsi_dz_accel"].iloc[i]))
+            sig_w["macd_dz_accel"] = (None if pd.isna(sf["macd_dz_accel"].iloc[i])
+                                      else float(sf["macd_dz_accel"].iloc[i]))
+            dz_ok_i = _dz_accel_ok(sig_w, c)          # F
 
-            _h52 = sf["hi52_ok"].iloc[i]
-            hi52_ok_i = True if pd.isna(_h52) else bool(_h52)
+            def _flag(col: str, default: bool = True) -> bool:
+                v = sf[col].iloc[i]
+                return default if pd.isna(v) else bool(v)
 
-            _reg = sf["regime_ok"].iloc[i]
-            regime_ok_i = True if pd.isna(_reg) else bool(_reg)
+            hi52_ok_i = _flag("hi52_ok")
+            regime_ok_i = _flag("regime_ok")
             regime_gate_i = regime_ok_i if (c.get("regime_enable", False)
                                             and c.get("regime_hard", True)) else True
+
+            # ── v2.0 gates, matching the live scan exactly ────
+            div_ok_i = _div_gate_ok(sig_w, +1, cw)                    # D
+            vol_ok_i = _flag("vol_ok")                                # E
+            rsi_floor_ok_i = _flag("rsi_floor_ok")                    # G
+            support_ok_i = _flag("support_ok")                        # I
+            cape_gate_ok_i = _cape_gate_ok(cape_i, cape_used_i, cw)   # K
 
             # ── H: per-trade, volatility-aware target ─────────
             atr_pct_i = sf["atr_pct"].iloc[i]
@@ -1689,7 +2249,9 @@ def backtest_one(sym_raw: str, lookback_weeks: int, profit_pct: float,
 
             if c.get("bt_apply_gates", True):
                 if not (ac_i and dz_ok_i and hi52_ok_i and regime_gate_i
-                        and atr_ok_i and cross_gate_i):
+                        and atr_ok_i and cross_gate_i
+                        and div_ok_i and vol_ok_i and rsi_floor_ok_i
+                        and support_ok_i and cape_gate_ok_i):
                     continue
                 if c.get("candle_body_hard", False) and not candle_ok_flag:
                     continue
@@ -1795,6 +2357,24 @@ def backtest_one(sym_raw: str, lookback_weeks: int, profit_pct: float,
                 "Bars_Since_Cross": bars_since_i,
                 "Regime_OK": "YES" if regime_ok_i else "NO",
                 "Candle_OK": "YES" if candle_ok_flag else "NO",
+                # ── v2.0 gate outcomes ───────────────────────
+                "Div_OK": "YES" if div_ok_i else "NO",
+                "Vol_OK": "YES" if vol_ok_i else "NO",
+                "Vol_Ratio": (None if pd.isna(sf["vol_ratio"].iloc[i])
+                              else round(float(sf["vol_ratio"].iloc[i]), 2)),
+                "RSI_Floor_OK": "YES" if rsi_floor_ok_i else "NO",
+                "Support_OK": "YES" if support_ok_i else "NO",
+                "Support_Dist_%": (None if pd.isna(sf["support_dist"].iloc[i])
+                                   else round(float(sf["support_dist"].iloc[i]), 2)),
+                "CAPE_Gate_OK": "YES" if cape_gate_ok_i else "NO",
+                "Divergence": " | ".join(
+                    [t for t, v in [
+                        ("BullReg(RSI)", div_rsi_i["reg_bull"]),
+                        ("BullHid(RSI)", div_rsi_i["hid_bull"]),
+                        ("BullReg(MACD)", div_macd_i["reg_bull"]),
+                        ("BullHid(MACD)", div_macd_i["hid_bull"]),
+                    ] if v]
+                ),
             })
 
         return sym_raw, trades, None
@@ -1893,13 +2473,15 @@ def generate_scan_pdf(
         canvas.restoreState()
 
     # ── Column definitions ─────────────────────────────────────────────────
-    sig_cols  = ["Symbol", "TF", "Signal", "Strength", "All_Gates", "Add_Conf",
-                 "Regime_OK", "Cross_OK", "ATRs_To_Target",
-                 "Composite", "CAPE_Z", "RSI_Z", "MACD_Z", "RSI", "Close", "Divergence"]
+    sig_cols  = ["Symbol", "TF", "Signal", "Strength", "All_Gates",
+                 "Close", "Target_Price", "Stop_Price", "R:R",
+                 "Regime_OK", "Cross_OK", "Div_OK", "Vol_OK", "Support_OK",
+                 "ATRs_To_Target", "Composite", "CAPE_Z", "RSI", "Divergence"]
     conf_cols = ["Symbol", "Confluence_Str", "Combined_Comp",
                  "D_Signal", "D_Strength", "D_Composite",
                  "W_Signal", "W_Strength", "W_Composite",
-                 "All_Gates", "CAPE_Z", "RSI_Z", "MACD_Z", "Close", "Divergence"]
+                 "All_Gates", "Close", "Target_Price", "Stop_Price", "R:R",
+                 "CAPE_Z", "RSI_Z", "MACD_Z", "Divergence"]
     div_cols  = ["Symbol", "TF", "Signal", "Strength", "Composite", "Close", "Divergence"]
 
     # ── Build story ────────────────────────────────────────────────────────
@@ -2104,6 +2686,17 @@ def _build_confluence_df(
             "ATR_%":           d.get("ATR_%"),
             "ATRs_To_Target":  d.get("ATRs_To_Target"),
             "Hi52_Ratio":      d.get("Hi52_Ratio"),
+            # ── v2.0 gates + tradeable levels ────────────────
+            "Div_OK":          d.get("Div_OK", ""),
+            "Vol_OK":          d.get("Vol_OK", ""),
+            "Vol_Ratio":       d.get("Vol_Ratio"),
+            "RSI_Floor_OK":    d.get("RSI_Floor_OK", ""),
+            "Support_OK":      d.get("Support_OK", ""),
+            "Support_Dist_%":  d.get("Support_Dist_%"),
+            "CAPE_Gate_OK":    d.get("CAPE_Gate_OK", ""),
+            "Target_Price":    d.get("Target_Price"),
+            "Stop_Price":      d.get("Stop_Price"),
+            "R:R":             d.get("R:R"),
             # ─────────────────────────────────────────────────
             "CAPE_Z":          d.get("CAPE_Z"),
             "RSI_Z":           d.get("RSI_Z"),
@@ -2422,6 +3015,161 @@ def render_sidebar() -> Dict[str, Any]:
             atr_target_mult = st.slider("Adaptive target (× ATR)", 1.0, 5.0,
                                         DEFAULT_CFG["atr_target_mult"], 0.25)
 
+        # ══════════════════════════════════════════════════════
+        # v2.0 — ITEMS D–K
+        # Same discipline: entry filters default OFF so the
+        # baseline stays intact and each can be A/B tested alone.
+        # ══════════════════════════════════════════════════════
+        with st.expander("🧩 v2.0 — Confirmation Filters (D · E · F · G)"):
+            st.caption("All default OFF. These use data the scanner already had.")
+
+            st.markdown("**D · Divergence (was computed then discarded)**")
+            div_use_enable = st.checkbox(
+                "Use divergence in the decision", DEFAULT_CFG["div_use_enable"],
+                help="Until v2.0 div_rsi/div_macd only produced a text label — "
+                     "they never touched All_Gates or the composite."
+            )
+            div_mode = st.radio("Divergence mode", ["bonus", "gate"],
+                                index=0 if DEFAULT_CFG["div_mode"] == "bonus" else 1,
+                                horizontal=True,
+                                help="bonus = nudge the score; gate = refuse "
+                                     "signals with no supporting divergence.")
+            div_bonus = st.slider("Bonus per divergent oscillator", 0.0, 1.0,
+                                  DEFAULT_CFG["div_bonus"], 0.05)
+            div_regular_only = st.checkbox("Regular divergence only (ignore hidden)",
+                                           DEFAULT_CFG["div_regular_only"])
+            div_gate_require_both = st.checkbox("Gate mode: require RSI *and* MACD",
+                                                DEFAULT_CFG["div_gate_require_both"])
+
+            st.markdown("---")
+            st.markdown("**E · Volume (loaded since v1.8, never used)**")
+            vol_enable = st.checkbox(
+                "Require volume expansion", DEFAULT_CFG["vol_enable"],
+                help="A turn on heavy volume is one somebody participated in. "
+                     "A turn on apathetic volume tends to drift."
+            )
+            vol_len = st.slider("Volume baseline length", 5, 60, DEFAULT_CFG["vol_len"])
+            vol_mult = st.slider("Volume vs baseline (×)", 1.0, 3.0,
+                                 DEFAULT_CFG["vol_mult"], 0.05)
+            vol_baseline = st.radio("Baseline", ["median", "mean"],
+                                    index=0 if DEFAULT_CFG["vol_baseline"] == "median" else 1,
+                                    horizontal=True)
+            vol_obv_enable = st.checkbox("Also require OBV rising",
+                                         DEFAULT_CFG["vol_obv_enable"])
+            vol_obv_len = st.slider("OBV slope length", 5, 60, DEFAULT_CFG["vol_obv_len"])
+
+            st.markdown("---")
+            st.markdown("**F · ΔZ acceleration, tightened**")
+            st.caption("Defaults reproduce the old bare '> 0, either indicator' test.")
+            dz_require_both = st.checkbox("Require BOTH oscillators accelerating",
+                                          DEFAULT_CFG["dz_accel_require_both"])
+            dz_accel_min = st.slider("Acceleration floor", 0.0, 1.0,
+                                     DEFAULT_CFG["dz_accel_min"], 0.02)
+            dz_accel_consec = st.slider("Consecutive rising ΔZ bars", 1, 6,
+                                        DEFAULT_CFG["dz_accel_consec"])
+
+            st.markdown("---")
+            st.markdown("**G · RSI floor (the falling-knife filter)**")
+            rsi_floor_enable = st.checkbox(
+                "Put a floor under RSI", DEFAULT_CFG["rsi_floor_enable"],
+                help="rsi_hard_max caps the top at 50 but nothing capped the "
+                     "bottom, so RSI 12 passed cleanly."
+            )
+            rsi_hard_min = st.slider("RSI floor (>)", 5, 45,
+                                     int(DEFAULT_CFG["rsi_hard_min"]))
+            rsi_reclaim_enable = st.checkbox(
+                "Stronger: require RSI to RECLAIM the level",
+                DEFAULT_CFG["rsi_reclaim_enable"],
+                help="RSI must be above the level now AND have been below it "
+                     "recently — turning up, not sitting in the basement."
+            )
+            rsi_reclaim_level = st.slider("Reclaim level", 15, 50,
+                                          int(DEFAULT_CFG["rsi_reclaim_level"]))
+            rsi_reclaim_lookback = st.slider("Reclaim lookback (bars)", 3, 30,
+                                             DEFAULT_CFG["rsi_reclaim_lookback"])
+
+        with st.expander("🎯 v2.0 — Structure, Ranking & CAPE (I · J · K)"):
+            st.markdown("**I · Distance to support**")
+            support_enable = st.checkbox(
+                "Require price near structural support", DEFAULT_CFG["support_enable"],
+                help="Entries near structure resolve faster and stop cleaner."
+            )
+            support_mode = st.radio("Support definition", ["either", "swing", "donchian"],
+                                    index=["either", "swing", "donchian"].index(
+                                        DEFAULT_CFG["support_mode"]),
+                                    horizontal=True)
+            support_lookback = st.slider("Support lookback (bars)", 10, 200,
+                                         DEFAULT_CFG["support_lookback"], 5)
+            support_max_dist = st.slider("Max % above support", 1.0, 25.0,
+                                         DEFAULT_CFG["support_max_dist_pct"], 0.5)
+            support_min_dist = st.slider("Tolerance below support (%)", -15.0, 0.0,
+                                         DEFAULT_CFG["support_min_dist_pct"], 0.5)
+
+            st.markdown("---")
+            st.markdown("**J · Cross-sectional ranking**")
+            st.caption(
+                "⚠️ Scan-only. The backtest runs one symbol at a time and has no "
+                "view of the rest of the universe on a historical date, so this "
+                "filter cannot be backtested. Treat it as a portfolio rule."
+            )
+            rank_enable = st.checkbox(
+                "Rank the universe instead of using a fixed threshold",
+                DEFAULT_CFG["rank_enable"],
+                help="min_composite is absolute, so a selloff gives you 200 "
+                     "candidates and a rally gives you none."
+            )
+            rank_mode = st.radio("Ranking mode", ["percentile", "topn"],
+                                 index=0 if DEFAULT_CFG["rank_mode"] == "percentile" else 1,
+                                 horizontal=True)
+            rank_pct = st.slider("Keep best % per timeframe", 1.0, 50.0,
+                                 DEFAULT_CFG["rank_pct"], 1.0)
+            rank_top_n = st.slider("Or keep top N", 5, 100, DEFAULT_CFG["rank_top_n"], 5)
+            rank_within_tf = st.checkbox("Rank within each timeframe separately",
+                                         DEFAULT_CFG["rank_within_tf"])
+
+            st.markdown("---")
+            st.markdown("**K · CAPE treatment**")
+            cape_mode = st.radio(
+                "CAPE role", ["weight", "gate", "both"],
+                index=["weight", "gate", "both"].index(DEFAULT_CFG["cape_mode"]),
+                horizontal=True,
+                help="weight = v1.8 behaviour (a third of the score). "
+                     "gate = CAPE only vetoes the expensive tail and carries "
+                     "no weight. A multi-year valuation measure timing a "
+                     "multi-week trade is arguably better as a veto."
+            )
+            cape_gate_min_z = st.slider("Gate: minimum CAPE z (higher = cheaper)",
+                                        -3.0, 2.0, DEFAULT_CFG["cape_gate_min_z"], 0.1)
+            cape_daily_scale = st.slider(
+                "Scale CAPE weight on DAILY only (×)", 0.0, 1.0,
+                DEFAULT_CFG["cape_daily_scale"], 0.05,
+                help="CAPE penalises exactly the re-rating names that move "
+                     "fastest. 1.0 = unchanged."
+            )
+            add_conf_cape_min = st.slider(
+                "Add_Conf CAPE cutoff (was hardcoded 1.73)", -1.0, 3.0,
+                DEFAULT_CFG["add_conf_cape_min"], 0.01,
+                help="This bare number sat inside _add_conf() with no config "
+                     "entry and no sidebar control, silently rejecting any "
+                     "CAPE-active candidate outside the cheapest sliver."
+            )
+
+        with st.expander("💰 v2.0 — Scan Target & Stop Levels"):
+            st.caption(
+                "v1.9 reported Target_% but no price, and read the hardcoded "
+                "backtest_profit_pct that no control ever set. The scan now "
+                "emits real levels."
+            )
+            scan_profit_pct = st.slider("Scan profit target (%)", 2.0, 30.0,
+                                        DEFAULT_CFG["scan_profit_pct"], 0.5)
+            scan_stop_mode = st.radio("Scan stop mode", ["pct", "atr"],
+                                      index=0 if DEFAULT_CFG["scan_stop_mode"] == "pct" else 1,
+                                      horizontal=True)
+            scan_stop_pct = st.slider("Scan stop (%)", 2.0, 25.0,
+                                      DEFAULT_CFG["scan_stop_pct"], 0.5)
+            scan_stop_atr_mult = st.slider("Scan stop (× ATR)", 0.5, 6.0,
+                                           DEFAULT_CFG["scan_stop_atr_mult"], 0.25)
+
         with st.expander("🧪 v1.9 — Backtest Realism"):
             st.caption(
                 "These are correctness fixes, not tuning knobs — v1.8's "
@@ -2481,11 +3229,19 @@ def render_sidebar() -> Dict[str, Any]:
         st.markdown("---")
         st.markdown(f'📦 **Universe:** {len(ALL_SYMBOLS)} NSE stocks')
 
-        _active = sum([regime_enable, hi52_band_enable, cross_enable, atr_target_enable])
+        _v19 = [regime_enable, hi52_band_enable, cross_enable, atr_target_enable]
+        _v20 = [div_use_enable, vol_enable, rsi_floor_enable,
+                support_enable, rank_enable,
+                cape_mode != "weight",
+                dz_require_both or dz_accel_min > 0 or dz_accel_consec > 1]
+        _active = sum(_v19) + sum(_v20)
         if _active == 0:
-            st.caption("🔵 v1.9 filters all OFF — baseline (v1.8-equivalent) signals.")
+            st.caption("🔵 All optional filters OFF — baseline (v1.8-equivalent) signals.")
         else:
-            st.caption(f"🟢 {_active} of 4 v1.9 entry-timing filters active.")
+            st.caption(
+                f"🟢 {_active} optional filters active "
+                f"({sum(_v19)} timing · {sum(_v20)} confirmation)."
+            )
 
         st.markdown("---")
         st.markdown(
@@ -2548,6 +3304,51 @@ def render_sidebar() -> Dict[str, Any]:
         "w_macd_zlen": int(w_macd_zlen),
         "w_cape_zlen": int(w_cape_zlen),
         "live_fetch_period": fetch_period,
+        # ── v2.0: D ───────────────────────────────────────────
+        "div_use_enable": div_use_enable,
+        "div_mode": div_mode,
+        "div_bonus": float(div_bonus),
+        "div_regular_only": div_regular_only,
+        "div_gate_require_both": div_gate_require_both,
+        # ── v2.0: E ───────────────────────────────────────────
+        "vol_enable": vol_enable,
+        "vol_len": int(vol_len),
+        "vol_mult": float(vol_mult),
+        "vol_baseline": vol_baseline,
+        "vol_obv_enable": vol_obv_enable,
+        "vol_obv_len": int(vol_obv_len),
+        # ── v2.0: F ───────────────────────────────────────────
+        "dz_accel_require_both": dz_require_both,
+        "dz_accel_min": float(dz_accel_min),
+        "dz_accel_consec": int(dz_accel_consec),
+        # ── v2.0: G ───────────────────────────────────────────
+        "rsi_floor_enable": rsi_floor_enable,
+        "rsi_hard_min": float(rsi_hard_min),
+        "rsi_reclaim_enable": rsi_reclaim_enable,
+        "rsi_reclaim_level": float(rsi_reclaim_level),
+        "rsi_reclaim_lookback": int(rsi_reclaim_lookback),
+        # ── v2.0: I ───────────────────────────────────────────
+        "support_enable": support_enable,
+        "support_mode": support_mode,
+        "support_lookback": int(support_lookback),
+        "support_max_dist_pct": float(support_max_dist),
+        "support_min_dist_pct": float(support_min_dist),
+        # ── v2.0: J ───────────────────────────────────────────
+        "rank_enable": rank_enable,
+        "rank_mode": rank_mode,
+        "rank_pct": float(rank_pct),
+        "rank_top_n": int(rank_top_n),
+        "rank_within_tf": rank_within_tf,
+        # ── v2.0: K ───────────────────────────────────────────
+        "cape_mode": cape_mode,
+        "cape_gate_min_z": float(cape_gate_min_z),
+        "cape_daily_scale": float(cape_daily_scale),
+        "add_conf_cape_min": float(add_conf_cape_min),
+        # ── v2.0: scan levels ─────────────────────────────────
+        "scan_profit_pct": float(scan_profit_pct),
+        "scan_stop_pct": float(scan_stop_pct),
+        "scan_stop_mode": scan_stop_mode,
+        "scan_stop_atr_mult": float(scan_stop_atr_mult),
     }
 
     st.session_state["cfg"] = cfg
@@ -2635,7 +3436,14 @@ def main():
                 st.warning("No signals found. Try relaxing filters or check connectivity.")
             else:
                 df_all = pd.DataFrame(all_rows)
-                df_signal = df_all[df_all["Composite"].abs() >= cfg["min_composite"]].copy()
+
+                # ── ITEM J: rank the universe against itself ──────
+                df_all = apply_cross_sectional_rank(df_all, cfg)
+
+                if cfg.get("rank_enable", False):
+                    df_signal = df_all[df_all["Rank_OK"] == "YES"].copy()
+                else:
+                    df_signal = df_all[df_all["Composite"].abs() >= cfg["min_composite"]].copy()
                 df_buy  = df_signal[df_signal["Signal"].isin(["BUY", "STRONG BUY"])].copy()
                 df_sell = df_signal[df_signal["Signal"].isin(["SELL", "STRONG SELL"])].copy()
                 df_div  = df_all[df_all["Divergence"] != ""].copy()
@@ -2659,20 +3467,37 @@ def main():
                 c3.markdown(metric_card("⚡ BUY Conf",    str(len(df_buy_conf)),                   "metric-blue"),   unsafe_allow_html=True)
                 c4.markdown(metric_card("⚡ SELL Conf",   str(len(df_sell_conf)),                  "metric-yellow"), unsafe_allow_html=True)
                 c5.markdown(metric_card("Divergences",     str(len(df_div)),                        "metric-blue"),   unsafe_allow_html=True)
-                c6.markdown(metric_card("Total Signals",   str(len(df_signal)),                     "metric-blue"),   unsafe_allow_html=True)
+                _n_final = int((df_signal.get("Final_OK", pd.Series(dtype=str)) == "YES").sum())
+                c6.markdown(metric_card("✅ Final_OK",     f"{_n_final} / {len(df_signal)}",        "metric-green"),  unsafe_allow_html=True)
+
+                if cfg.get("rank_enable", False):
+                    st.markdown(
+                        f'<div class="info-box">📊 <b>Cross-sectional ranking active</b> — '
+                        f'keeping the best {cfg["rank_pct"]:.0f}% per timeframe '
+                        f'(mode: {cfg["rank_mode"]}) instead of the fixed '
+                        f'|Composite| ≥ {cfg["min_composite"]} threshold. '
+                        f'Ranking is scan-only and cannot be backtested.</div>',
+                        unsafe_allow_html=True)
 
                 st.markdown(f'<div class="info-box">✓ Scan completed: <b>{ts_str}</b> &nbsp;·&nbsp; Universe: <b>{len(ALL_SYMBOLS)} stocks</b></div>', unsafe_allow_html=True)
 
                 # ── Display columns ────────────────────────────────────
-                display_cols = ["Symbol", "TF", "Signal", "Strength", "All_Gates",
+                display_cols = ["Symbol", "TF", "Signal", "Strength",
+                                "Final_OK", "All_Gates", "Rank", "Pctile",
+                                # ── tradeable levels ───────────
+                                "Close", "Target_Price", "Stop_Price",
+                                "Target_%", "Stop_%", "R:R",
+                                # ── gates ──────────────────────
                                 "Add_Conf", "ΔZ_Accel", "Candle_OK", "Hi52_OK",
-                                # ── v1.9 entry-timing columns ──
-                                "Regime_OK", "Cross_OK", "Bars_Since_Cross",
-                                "ATR_OK", "ATR_%", "ATRs_To_Target", "Target_%",
-                                "Hi52_Ratio",
+                                "Regime_OK", "Cross_OK", "ATR_OK",
+                                "Div_OK", "Vol_OK", "RSI_Floor_OK",
+                                "Support_OK", "CAPE_Gate_OK",
+                                # ── diagnostics ────────────────
+                                "Bars_Since_Cross", "ATR_%", "ATRs_To_Target",
+                                "Vol_Ratio", "Support_Dist_%", "Hi52_Ratio",
                                 # ───────────────────────────────
                                 "Composite", "CAPE_Z", "RSI_Z", "MACD_Z",
-                                "RSI", "Close", "Divergence"]
+                                "RSI", "Divergence"]
 
                 # ══════════════════════════════════════════════════════
                 # ⚡ DUAL-TF CONFLUENCE SECTION (top of report)
@@ -3007,21 +3832,62 @@ def main():
 
         ---
 
-        ### Still open (suggested but not implemented)
+        ### 🧩 v2.0 — items D to K (all default **OFF**)
 
-        These were in the original review and remain available if you want them:
+        **D · Divergence, finally used.** It was always computed, turned into
+        a text label, and then ignored — it never touched `All_Gates` or the
+        composite. Now it can either nudge the score (*bonus* mode) or veto
+        signals with no supporting divergence (*gate* mode). Divergence is
+        now calculated for **every bar**, not just the last one, which is
+        what allows the backtest to test it rather than just print it.
 
-        - **D** — divergence is computed but discarded; `div_rsi`/`div_macd`
-          still only produce a display tag and never enter `All_Gates`
-        - **E** — `volume` is loaded then thrown away in both signal functions
-        - **F** — the ΔZ gate still uses OR with a bare `> 0` threshold
-        - **G** — `rsi_hard_max` caps the top but there is no RSI floor, so
-          RSI 12 passes cleanly
-        - **I** — distance to prior swing low / Donchian support
-        - **J** — cross-sectional ranking instead of a fixed `min_composite`
-        - **K** — CAPE's 33% weight on the daily timeframe, and the hardcoded
-          magic `1.73` cutoff inside `_add_conf()` that is neither in
-          `DEFAULT_CFG` nor exposed in the sidebar
+        **E · Volume, finally used.** `volume` was read into a local variable
+        in both signal functions and never referenced again. You can now
+        require the bar to trade at a multiple of its own rolling baseline,
+        optionally with OBV rising as well.
+
+        **F · ΔZ acceleration, tightened.** The old test passed if *either*
+        oscillator ticked up by *any* amount. Three knobs now available:
+        require both, set a magnitude floor, or demand N consecutive rising
+        bars. Defaults reproduce the old test exactly.
+
+        **G · RSI floor.** `rsi_hard_max` capped the top at 50 but nothing
+        capped the bottom, so RSI 12 passed cleanly — the falling-knife hole
+        in a fully contrarian system. *Reclaim* mode is stronger still: RSI
+        must be above the level now **and** have been below it recently.
+
+        **I · Distance to support.** Nearest swing low or Donchian low from
+        existing OHLC. Entries near structure resolve faster and stop cleaner.
+
+        **J · Cross-sectional ranking.** `min_composite` is an absolute
+        z-score, so a broad selloff hands you 200 candidates and a melt-up
+        hands you none — neither of which is a decision you made. Ranking
+        fixes the candidate count and lets the threshold float.
+        **This one cannot be backtested** — the backtest runs one symbol at a
+        time with no view of the rest of the universe on a historical date.
+        Treat it as a portfolio-construction rule, not a validated signal.
+
+        **K · CAPE treatment.** Two changes. First, *gate* mode lets CAPE veto
+        the expensive tail without carrying a third of the score — it is a
+        multi-year valuation measure being asked to time a multi-week trade,
+        and it penalises exactly the re-rating names that move fastest. There
+        is also a daily-only weight scale. Second, the bare `1.73` cutoff that
+        sat hardcoded inside `_add_conf()` — in no config, in no sidebar — is
+        now a visible, tunable parameter. Default unchanged.
+
+        ---
+
+        ### 💰 Target and stop levels
+
+        v1.9 reported `Target_%` but no price, and read `backtest_profit_pct`,
+        which no sidebar control ever set — so the Backtest tab's profit
+        slider had no effect on the scan. The scan now has its own target and
+        stop settings and emits **`Target_Price`**, **`Stop_Price`** and
+        **`R:R`** on every row.
+
+        Note that in ATR *gate* mode the target percentage is the same for
+        every stock (the ATR filter only removes unreachable candidates).
+        Switch to ATR *adaptive* mode for a genuinely per-stock target.
 
         ---
 
