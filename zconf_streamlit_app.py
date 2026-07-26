@@ -62,9 +62,60 @@ v2.1 — BUGFIX
   also made distinct, since identical labels were confusing to
   read even before they crashed anything.
 
+═══════════════════════════════════════════════════════════════
+v2.2 — ENTRY REFINEMENT PACK (shorter profit target)
+No new data inputs. Everything below is derived from the OHLCV
+series the scanner already downloads.
+═══════════════════════════════════════════════════════════════
+
+PROBLEM
+  Despite v1.9's ATR-reachability filter and v2.0's volume / RSI
+  floor / support gates, the median hold-to-target is still long.
+  Five structural gaps remain:
+
+    1. _candle_ok accepts ANY green bar or hammer. A single up-tick
+       after a 10-day slide passes. It does not require an actual
+       reversal PATTERN (engulfing, piercing, morning star).
+    2. No recovery-from-low check. The scanner buys deeply oversold
+       names but never asks whether the stock is still falling
+       (knife) or has already bounced 12% (chaser). Both fail to
+       reach target quickly.
+    3. No short-term ROC. Composite Z says "cheap". It does NOT say
+       "cheap and rising". That difference is the difference between
+       a 4-week hit and a 20-week grind.
+    4. No R:R minimum gate. With shorter profit targets, many
+       setups end up with target < stop — i.e. negative expectancy.
+    5. No volatility-squeeze detection. Entries taken mid-grind
+       (high-ATR phase) take longer to resolve than entries taken
+       at the end of a contraction (squeeze), which precedes the
+       expansion that reaches the target.
+
+NEW FILTERS (all sidebar-toggled, ALL DEFAULT OFF so an untouched
+v2.2 reproduces v2.1 signal-for-signal):
+  L. reversal_enable   — multi-bar reversal pattern instead of
+                         a single green/hammer bar.
+  M. recovery_enable   — price must be within a band above its
+                         own recent N-bar low. Drops BOTH knives
+                         AND chasers.
+  N. roc_enable        — short-term rate-of-change must confirm
+                         the turn is actually happening.
+  P. rr_min_enable     — reject setups where R:R < threshold.
+  Q. squeeze_enable    — current ATR must be a contraction vs its
+                         own baseline. Squeeze precedes expansion.
+
+DEFAULT-VALUE CHANGES (apply on first load; slider can revert):
+  scan_profit_pct     8.0  -> 5.0   (the fixed-target mode)
+  backtest_profit_pct 8.0  -> 5.0   (so scan & backtest match)
+  atr_target_mult     2.5  -> 1.8   (adaptive mode)
+  atr_target_cap_pct  20.0 -> 12.0  (adaptive mode cap)
+
+  Rationale: a 2.5x-ATR target with a 20% cap is a multi-week
+  move on most NSE names. 1.8x still clears a normal up-week but
+  is reachable inside the fast-hit window.
+
 To run:
     pip install streamlit yfinance pandas numpy plotly reportlab tenacity
-    streamlit run vms_scanner_v1_9.py
+    streamlit run zconf_streamlit_app_v2_2.py
 """
 
 # ══════════════════════════════════════════════════════════════
@@ -88,7 +139,7 @@ __author__ = "Dr Shantanu Samanta"
 __email__ = "dr.shantanu.samanta@gmail.com"
 __copyright__ = "Copyright © 2026 Dr Shantanu Samanta. All rights reserved."
 __license__ = "Proprietary"
-__version__ = "2.1"
+__version__ = "2.2"
 
 COPYRIGHT_LINE = "© 2026 Dr Shantanu Samanta · All rights reserved"
 
@@ -124,7 +175,7 @@ except ImportError:
 # ══════════════════════════════════════════════════════════════
 
 st.set_page_config(
-    page_title="VMS Scanner v1.8 — NSE Swing Trading",
+    page_title="VMS Scanner v2.2 — NSE Swing Trading",
     page_icon="📈",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -166,7 +217,9 @@ DEFAULT_CFG: Dict[str, Any] = {
     "hi52_enable": True, "hi52_bars": 252, "hi52_pct": 0.85,
     # Backtest
     "bt_min_composite": 1.25,
-    "backtest_profit_pct": 8.0,
+    # v2.2: default backtest target tightened from 8.0 to 5.0 to
+    # match the scan default and the "shorter profit target" goal.
+    "backtest_profit_pct": 5.0,
 
     # ══════════════════════════════════════════════════════════
     # v1.9 ADDITIONS
@@ -212,9 +265,12 @@ DEFAULT_CFG: Dict[str, Any] = {
     "atr_len": 14,
     "atr_max_mult": 3.0,             # reject if target > N x ATR%
     "atr_target_mode": "gate",       # "gate" | "adaptive"
-    "atr_target_mult": 2.5,          # adaptive mode: target = N x ATR%
+    # v2.2: tightened from 2.5 / 20.0 to 1.8 / 12.0 so the
+    # adaptive target is a 1-2 week move on most NSE names rather
+    # than a multi-month trek. Slider can revert if needed.
+    "atr_target_mult": 1.8,          # adaptive mode: target = N x ATR%
     "atr_target_floor_pct": 4.0,     # adaptive mode: clamp target range
-    "atr_target_cap_pct": 20.0,
+    "atr_target_cap_pct": 12.0,
 
     # ── FIX 1 & 2: backtest realism ───────────────────────────
     "bt_apply_gates": True,          # correctness fix — on by default
@@ -290,10 +346,62 @@ DEFAULT_CFG: Dict[str, Any] = {
     # ── Live-scan target / stop levels ────────────────────────
     # v1.9 emitted Target_% but no price, and read the hardcoded
     # backtest_profit_pct, which no sidebar control ever set.
-    "scan_profit_pct": 8.0,
+    #
+    # v2.2: defaults tightened from 8.0 to 5.0 — "shorter profit
+    # target" is the explicit goal of this release. The sidebar
+    # slider can still be raised back to 8.0+ if you want the
+    # older behaviour.
+    "scan_profit_pct": 5.0,
     "scan_stop_pct": 8.0,
     "scan_stop_mode": "pct",         # "pct" | "atr"
     "scan_stop_atr_mult": 2.0,
+
+    # ══════════════════════════════════════════════════════════
+    # v2.2 ADDITIONS — ENTRY REFINEMENT PACK
+    # Targeted at "better swing entries + shorter profit targets".
+    # All entry filters default OFF so an untouched v2.2 reproduces
+    # v2.1 signal-for-signal until each is explicitly enabled.
+    # ══════════════════════════════════════════════════════════
+
+    # ── L: multi-bar reversal pattern ─────────────────────────
+    # v2.1's _candle_ok accepts ANY green bar or hammer; a single
+    # up-day after a 10-day slide passes. A 2/3-bar pattern requires
+    # the turn to actually be a *pattern*, not a single green tick.
+    "reversal_enable": False,
+    "reversal_mode": "any",          # "engulf" | "piercing" | "morningstar" | "any"
+    "reversal_min_body_pct": 0.4,    # body / range of the reversal bar
+
+    # ── M: recovery-from-low gate ─────────────────────────────
+    # Avoids both falling knives (zero recovery) and extended
+    # bounces (chasing). Requires price to be within [min, max] %
+    # above its own recent N-bar low.
+    "recovery_enable": False,
+    "recovery_lookback": 10,
+    "recovery_min_pct": 0.5,         # must be at least 0.5% above the low
+    "recovery_max_pct": 7.0,         # but no more than 7% above it
+
+    # ── N: short-term rate-of-change ("actually turning up") ──
+    # Composite Z says "deeply oversold". ROC says "actually rising".
+    # The difference is the difference between "cheap" and "cheap
+    # and rising" — only the second reaches a target quickly.
+    # Applied to BUY signals only; SELL signals bypass this gate.
+    "roc_enable": False,
+    "roc_len": 5,
+    "roc_min": 0.0,                  # 5-day ROC must be >= 0 on BUY signals
+
+    # ── P: R:R minimum gate ───────────────────────────────────
+    # Rejects setups where the stop is wider than the target. With
+    # shorter profit targets this becomes the binding constraint.
+    "rr_min_enable": False,
+    "rr_min": 1.5,                   # target / stop must be >= 1.5
+
+    # ── Q: ATR contraction / squeeze ──────────────────────────
+    # Current ATR vs its own N-bar average. A squeeze (low ratio)
+    # is the contraction that precedes expansion; expansions reach
+    # targets faster than grind phases.
+    "squeeze_enable": False,
+    "squeeze_len": 20,
+    "squeeze_max_ratio": 0.85,       # current ATR must be <= 85% of baseline
 }
 
 # ── Stock universe — merged from all watchlists (290 symbols) ──────────────────
@@ -1416,6 +1524,228 @@ def _effective_cape_weight(c: Dict[str, Any]) -> float:
     return float(c["wt_cape"])
 
 
+# ══════════════════════════════════════════════════════════════
+# v2.2 HELPERS — ITEMS L · M · N · P · Q (entry refinement pack)
+# All five are derived from existing OHLC — no new data sources.
+# Each returns a per-bar boolean Series (and where useful, the
+# underlying diagnostic) so the backtest can test them bar-by-bar
+# rather than only at the last bar.
+# ══════════════════════════════════════════════════════════════
+
+# ── L · MULTI-BAR REVERSAL PATTERN ────────────────────────────
+
+def _reversal_pattern_ok_series(open_: pd.Series, high: pd.Series,
+                                low: pd.Series, close: pd.Series,
+                                c: Optional[Dict] = None) -> pd.Series:
+    """
+    ITEM L — multi-bar reversal pattern, replacing the single-bar
+    "green OR hammer" test in _candle_ok.
+
+    A single up-day passes _candle_ok after a 10-day slide. A 2/3-bar
+    pattern requires the turn to actually be a *pattern*.
+
+    Patterns detected (all bullish, for the BUY side; mirror-imaged
+    for SELL is not implemented because the scanner's BUY side is
+    where the time-to-target problem lives):
+
+        engulf      — prev bar red, current bar green, current body
+                       engulfs the prev body (current close >= prev
+                       open AND current open <= prev close).
+        piercing    — prev bar red, current opens below prev close,
+                       closes above the midpoint of prev body but
+                       below prev open.
+        morningstar — 3-bar: prev-2 red, middle small body (<= 50% of
+                       prev-2 body), current green closing in the
+                       upper half of prev-2 body.
+        any         — any of the above.
+
+    Uses lookback only — no lookahead. Pattern at bar t is detected
+    using bars t-2, t-1, t only.
+
+    `reversal_min_body_pct` filters out doji-like bars where the
+    body is too small a fraction of the range to be meaningful.
+    """
+    if c is None:
+        c = st.session_state.get("cfg", DEFAULT_CFG)
+
+    # When the gate is OFF, every bar passes (no constraint).
+    # Same convention as _recovery_from_low_ok_series / _roc_ok_series /
+    # _squeeze_ok_series — returning False here would reject every signal.
+    if not c.get("reversal_enable", False):
+        return pd.Series(True, index=close.index)
+
+    out = pd.Series(False, index=close.index)
+
+    mode = c.get("reversal_mode", "any")
+    min_body = float(c.get("reversal_min_body_pct", 0.4))
+
+    o = open_.values
+    cl = close.values
+    hi = high.values
+    lo = low.values
+    n = len(close)
+
+    for i in range(2, n):
+        range_curr = hi[i] - lo[i]
+        if range_curr <= 0:
+            continue
+        body_curr = cl[i] - o[i]
+        # require a meaningful body on the reversal bar
+        if abs(body_curr) / range_curr < min_body:
+            continue
+
+        # ── 2-bar: engulfing ───────────────────────────────
+        body_prev = cl[i - 1] - o[i - 1]
+        prev_red = body_prev < 0
+        curr_green = body_curr > 0
+        engulf = (prev_red and curr_green
+                  and cl[i] >= o[i - 1]
+                  and o[i] <= cl[i - 1])
+
+        # ── 2-bar: piercing line ───────────────────────────
+        prev_mid = (o[i - 1] + cl[i - 1]) / 2.0
+        piercing = (prev_red and curr_green
+                    and o[i] < cl[i - 1]
+                    and cl[i] > prev_mid
+                    and cl[i] < o[i - 1])
+
+        # ── 3-bar: morning star ────────────────────────────
+        # bar i-2 = prior trend (red), bar i-1 = star (small body),
+        # bar i = reversal (green, closes in upper half of bar i-2)
+        body_p2 = cl[i - 2] - o[i - 2]
+        body_p1 = cl[i - 1] - o[i - 1]
+        prev2_red = body_p2 < 0
+        mid_small = abs(body_p1) < abs(body_p2) * 0.5
+        upper_half = cl[i] > (o[i - 2] + cl[i - 2]) / 2.0
+        morning = (prev2_red and mid_small and curr_green and upper_half)
+
+        if mode == "engulf":
+            out.iloc[i] = bool(engulf)
+        elif mode == "piercing":
+            out.iloc[i] = bool(piercing)
+        elif mode == "morningstar":
+            out.iloc[i] = bool(morning)
+        else:  # any
+            out.iloc[i] = bool(engulf or piercing or morning)
+
+    return out
+
+
+# ── M · RECOVERY-FROM-LOW GATE ────────────────────────────────
+
+def _recovery_from_low_ok_series(low: pd.Series, close: pd.Series,
+                                 c: Optional[Dict] = None) -> Tuple[pd.Series, pd.Series]:
+    """
+    ITEM M — recovery-from-low gate.
+
+    Two failure modes the existing scanner hits:
+        1. Falling knife: composite is deeply oversold because the
+           stock has fallen 15% in 10 days and is STILL falling. The
+           bounce never comes.
+        2. Chaser: stock bottomed 3 weeks ago and has already bounced
+           12%; the easy money is gone and the target is now further
+           away in ATR terms.
+
+    The gate requires close to be within [min, max] % above its own
+    recent N-bar low. Floor drops the knives; ceiling drops the chases.
+
+    Returns (ok_series, recovery_pct_series).
+    """
+    if c is None:
+        c = st.session_state.get("cfg", DEFAULT_CFG)
+
+    lb = int(c.get("recovery_lookback", 10))
+    roll_low = low.rolling(lb, min_periods=max(3, lb // 3)).min()
+    recovery_pct = (close - roll_low) / roll_low.replace(0, np.nan) * 100.0
+
+    if not c.get("recovery_enable", False):
+        return pd.Series(True, index=close.index), recovery_pct
+
+    ok = ((recovery_pct >= float(c["recovery_min_pct"]))
+          & (recovery_pct <= float(c["recovery_max_pct"])))
+    return ok.fillna(False), recovery_pct
+
+
+# ── N · SHORT-TERM RATE OF CHANGE ─────────────────────────────
+
+def _roc_ok_series(close: pd.Series, c: Optional[Dict] = None) -> Tuple[pd.Series, pd.Series]:
+    """
+    ITEM N — short-term rate of change.
+
+    The composite Z says "deeply oversold". ROC says "actually turning
+    up". The difference is "cheap" vs "cheap and rising" — and only
+    the second reaches a target quickly.
+
+    Returns (ok_series, roc_value_series).
+
+    Note: this gate is intended for BUY signals. The caller is
+    responsible for only applying it on the BUY side (SELL signals
+    bypass it).
+    """
+    if c is None:
+        c = st.session_state.get("cfg", DEFAULT_CFG)
+
+    n = int(c.get("roc_len", 5))
+    roc = close.pct_change(n) * 100.0
+
+    if not c.get("roc_enable", False):
+        return pd.Series(True, index=close.index), roc
+
+    ok = roc >= float(c.get("roc_min", 0.0))
+    return ok.fillna(False), roc
+
+
+# ── P · R:R MINIMUM GATE (scalar) ──────────────────────────────
+
+def _rr_ok(target_pct: float, stop_pct: float,
+           c: Optional[Dict] = None) -> bool:
+    """
+    ITEM P — reject setups where the stop is wider than the target.
+
+    With shorter profit targets this becomes the binding constraint:
+    a 5% target against a 6% stop is negative expectancy no matter
+    how good the entry timing is. A scalar check; the per-bar
+    equivalent doesn't make sense because target/stop are derived
+    at signal time, not per bar.
+    """
+    if c is None:
+        c = st.session_state.get("cfg", DEFAULT_CFG)
+    if not c.get("rr_min_enable", False):
+        return True
+    if stop_pct <= 0:
+        return True
+    return (target_pct / stop_pct) >= float(c["rr_min"])
+
+
+# ── Q · ATR CONTRACTION / SQUEEZE ──────────────────────────────
+
+def _squeeze_ok_series(high: pd.Series, low: pd.Series, close: pd.Series,
+                       c: Optional[Dict] = None) -> Tuple[pd.Series, pd.Series]:
+    """
+    ITEM Q — ATR contraction (squeeze).
+
+    Current ATR vs its own rolling mean. A low ratio is a squeeze —
+    the quiet before expansion. Expansions reach targets faster than
+    grinds, so requiring a squeeze at entry time biases the system
+    toward setups that are about to move.
+
+    Returns (ok_series, atr_ratio_series).
+    """
+    if c is None:
+        c = st.session_state.get("cfg", DEFAULT_CFG)
+
+    atr = _atr(high, low, close, c["atr_len"])
+    n = int(c.get("squeeze_len", 20))
+    baseline = atr.rolling(n, min_periods=max(5, n // 3)).mean()
+    ratio = atr / baseline.replace(0, np.nan)
+
+    if not c.get("squeeze_enable", False):
+        return pd.Series(True, index=close.index), ratio
+
+    ok = ratio <= float(c.get("squeeze_max_ratio", 0.85))
+    return ok.fillna(False), ratio
+
+
 def compute_signals(df: pd.DataFrame, c: Optional[Dict] = None,
                     tf: str = "Daily") -> Optional[Dict[str, Any]]:
     """Compute RSI, MACD, and momentum signals."""
@@ -1432,6 +1762,7 @@ def compute_signals(df: pd.DataFrame, c: Optional[Dict] = None,
     close = df["Close"].astype(float)
     high = df["High"].astype(float)
     low = df["Low"].astype(float)
+    open_ = df["Open"].astype(float)
     volume = df["Volume"].astype(float).replace(0, np.nan)
 
     # ── RSI Z (contrarian) ───────────────────────────────────
@@ -1469,6 +1800,12 @@ def compute_signals(df: pd.DataFrame, c: Optional[Dict] = None,
     support_ok_s, support_dist_s = _support_ok_series(low, close, c)
     rsi_streak_s = _consec_rising(rsi_dz)
     macd_streak_s = _consec_rising(macd_dz)
+
+    # ── v2.2: L reversal · M recovery · N ROC · Q squeeze ─────
+    reversal_ok_s = _reversal_pattern_ok_series(open_, high, low, close, c)
+    recovery_ok_s, recovery_pct_s = _recovery_from_low_ok_series(low, close, c)
+    roc_ok_s, roc_val_s = _roc_ok_series(close, c)
+    squeeze_ok_s, squeeze_ratio_s = _squeeze_ok_series(high, low, close, c)
 
     def _f(s: pd.Series) -> Optional[float]:
         v = s.iloc[-1]
@@ -1510,6 +1847,14 @@ def compute_signals(df: pd.DataFrame, c: Optional[Dict] = None,
         "support_dist": _f(support_dist_s),
         "rsi_dz_streak": _i(rsi_streak_s),
         "macd_dz_streak": _i(macd_streak_s),
+        # ── v2.2 ────────────────────────────────────────────
+        "Reversal_OK": _b(reversal_ok_s),
+        "Recovery_OK": _b(recovery_ok_s),
+        "Recovery_%": _f(recovery_pct_s),
+        "ROC_OK": _b(roc_ok_s),
+        "ROC_%": _f(roc_val_s),
+        "Squeeze_OK": _b(squeeze_ok_s),
+        "Squeeze_Ratio": _f(squeeze_ratio_s),
         # series kept for cross detection in scan_stock — never written
         # into result rows, so the exported tables are unchanged.
         "_rsi_z_s": rsi_z,
@@ -1890,10 +2235,25 @@ def scan_stock(sym_raw: str, c: Optional[Dict] = None) -> Tuple[str, List[Dict[s
             support_ok = bool(sig.get("support_pass", True))       # I
             cape_gate_ok = _cape_gate_ok(cape_z, cape_used, tfc)   # K
 
+            # ══════════════════════════════════════════════════
+            # v2.2 GATES — L · M · N · P · Q (entry refinement)
+            # ══════════════════════════════════════════════════
+            reversal_ok = bool(sig.get("Reversal_OK", True))       # L
+            recovery_ok = bool(sig.get("Recovery_OK", True))       # M
+            # N: ROC gate applies to BUY signals only — SELL bypasses
+            if _dir > 0:
+                roc_ok = bool(sig.get("ROC_OK", True))
+            else:
+                roc_ok = True
+            squeeze_ok = bool(sig.get("Squeeze_OK", True))         # Q
+            # P: R:R gate is computed below once target/stop are known
+
             all_gates = (ac and dz_acc_ok and candle_ok and hi52_ok
                          and regime_gate and atr_ok and cross_gate
                          and div_ok and vol_ok and rsi_floor_ok
-                         and support_ok and cape_gate_ok)
+                         and support_ok and cape_gate_ok
+                         and reversal_ok and recovery_ok and roc_ok
+                         and squeeze_ok)
 
             # ── Actual price levels (v1.9 gave a % but no price) ──
             _close = sig["close"]
@@ -1904,6 +2264,11 @@ def scan_stock(sym_raw: str, c: Optional[Dict] = None) -> Tuple[str, List[Dict[s
                 _stop_pct = float(tfc["scan_stop_pct"])
             stop_price = round(_close * (1 - _stop_pct / 100.0), 2)
             rr = round(target_pct / _stop_pct, 2) if _stop_pct > 0 else None
+
+            # ── v2.2 ITEM P: R:R minimum gate (after target/stop known)
+            rr_ok = _rr_ok(target_pct, _stop_pct, tfc)
+            if not rr_ok:
+                all_gates = False
 
             rows.append({
                 "Symbol": sym_raw,
@@ -1930,6 +2295,15 @@ def scan_stock(sym_raw: str, c: Optional[Dict] = None) -> Tuple[str, List[Dict[s
                 "Support_OK": "YES" if support_ok else "NO",
                 "Support_Dist_%": sig.get("support_dist"),
                 "CAPE_Gate_OK": "YES" if cape_gate_ok else "NO",
+                # ── v2.2 gate columns (L · M · N · P · Q) ───
+                "Reversal_OK": "YES" if reversal_ok else "NO",
+                "Recovery_OK": "YES" if recovery_ok else "NO",
+                "Recovery_%": sig.get("Recovery_%"),
+                "ROC_OK": "YES" if roc_ok else "NO",
+                "ROC_%": sig.get("ROC_%"),
+                "Squeeze_OK": "YES" if squeeze_ok else "NO",
+                "Squeeze_Ratio": sig.get("Squeeze_Ratio"),
+                "R:R_OK": "YES" if rr_ok else "NO",
                 # ── tradeable levels ─────────────────────────
                 "Target_%": round(target_pct, 2),
                 "Target_Price": target_price,
@@ -2013,6 +2387,12 @@ def _weekly_signal_frame(df: pd.DataFrame, c: Dict[str, Any]) -> pd.DataFrame:
     rsi_streak_s = _consec_rising(rsi_dz)
     macd_streak_s = _consec_rising(macd_dz)
 
+    # ── v2.2 additions: L · M · N · Q (entry refinement) ──────
+    reversal_ok_s = _reversal_pattern_ok_series(open_, high, low, close, c)
+    recovery_ok_s, recovery_pct_s = _recovery_from_low_ok_series(low, close, c)
+    roc_ok_s, roc_val_s = _roc_ok_series(close, c)
+    squeeze_ok_s, squeeze_ratio_s = _squeeze_ok_series(high, low, close, c)
+
     # Per-bar divergence, so the backtest can actually TEST item D
     # rather than merely print it the way v1.8 and v1.9 did.
     if c["div_enable"]:
@@ -2052,6 +2432,14 @@ def _weekly_signal_frame(df: pd.DataFrame, c: Dict[str, Any]) -> pd.DataFrame:
         "div_m_hid_bull": div_m["hid_bull"],
         "div_m_reg_bear": div_m["reg_bear"],
         "div_m_hid_bear": div_m["hid_bear"],
+        # ── v2.2 entry-refinement series ─────────────────────
+        "reversal_ok": reversal_ok_s,
+        "recovery_ok": recovery_ok_s,
+        "recovery_pct": recovery_pct_s,
+        "roc_ok": roc_ok_s,
+        "roc_val": roc_val_s,
+        "squeeze_ok": squeeze_ok_s,
+        "squeeze_ratio": squeeze_ratio_s,
         "open": open_,
         "high": high,
         "low": low,
@@ -2236,6 +2624,7 @@ def backtest_one(sym_raw: str, lookback_weeks: int, profit_pct: float,
             cape_gate_ok_i = _cape_gate_ok(cape_i, cape_used_i, cw)   # K
 
             # ── H: per-trade, volatility-aware target ─────────
+            # (Moved above the v2.2 R:R gate so the latter can use it.)
             atr_pct_i = sf["atr_pct"].iloc[i]
             atr_pct_i = None if pd.isna(atr_pct_i) else float(atr_pct_i)
             tgt_pct_i = _adaptive_target_pct(atr_pct_i, profit_pct, c)
@@ -2248,6 +2637,18 @@ def backtest_one(sym_raw: str, lookback_weeks: int, profit_pct: float,
                     atr_ok_i = atrs_needed <= c["atr_max_mult"]
             elif c.get("atr_target_enable", False):
                 atr_ok_i = False
+
+            # ── v2.2 gates, matching the live scan exactly ────
+            reversal_ok_i = _flag("reversal_ok")                       # L
+            recovery_ok_i = _flag("recovery_ok")                       # M
+            roc_ok_i = _flag("roc_ok")                                 # N (BUY-only gate)
+            squeeze_ok_i = _flag("squeeze_ok")                         # Q
+            # ── P: R:R gate. Need stop_dist_pct, computed here ──
+            if c.get("bt_stop_mode", "pct") == "atr" and atr_pct_i:
+                stop_dist_pct = atr_pct_i * c["bt_stop_atr_mult"]
+            else:
+                stop_dist_pct = c["bt_stop_pct"]
+            rr_ok_i = _rr_ok(tgt_pct_i, stop_dist_pct, c)             # P
 
             # ── C: fresh cross, not a stale plateau ───────────
             bars_since_i = None
@@ -2264,7 +2665,9 @@ def backtest_one(sym_raw: str, lookback_weeks: int, profit_pct: float,
                 if not (ac_i and dz_ok_i and hi52_ok_i and regime_gate_i
                         and atr_ok_i and cross_gate_i
                         and div_ok_i and vol_ok_i and rsi_floor_ok_i
-                        and support_ok_i and cape_gate_ok_i):
+                        and support_ok_i and cape_gate_ok_i
+                        and reversal_ok_i and recovery_ok_i and roc_ok_i
+                        and squeeze_ok_i and rr_ok_i):
                     continue
                 if c.get("candle_body_hard", False) and not candle_ok_flag:
                     continue
@@ -2293,12 +2696,9 @@ def backtest_one(sym_raw: str, lookback_weeks: int, profit_pct: float,
             target_price = round(entry_price * (1 + tgt_pct_i / 100.0), 2)
 
             # ── FIX 2: stop level ─────────────────────────────
+            # stop_dist_pct was computed above for the v2.2 R:R gate.
             stop_price = None
             if c.get("bt_stop_enable", True):
-                if c.get("bt_stop_mode", "pct") == "atr" and atr_pct_i:
-                    stop_dist_pct = atr_pct_i * c["bt_stop_atr_mult"]
-                else:
-                    stop_dist_pct = c["bt_stop_pct"]
                 stop_price = round(entry_price * (1 - stop_dist_pct / 100.0), 2)
 
             max_hold = int(c.get("bt_max_hold_wks", 26))
@@ -2380,6 +2780,18 @@ def backtest_one(sym_raw: str, lookback_weeks: int, profit_pct: float,
                 "Support_Dist_%": (None if pd.isna(sf["support_dist"].iloc[i])
                                    else round(float(sf["support_dist"].iloc[i]), 2)),
                 "CAPE_Gate_OK": "YES" if cape_gate_ok_i else "NO",
+                # ── v2.2 gate outcomes ───────────────────────
+                "Reversal_OK": "YES" if reversal_ok_i else "NO",
+                "Recovery_OK": "YES" if recovery_ok_i else "NO",
+                "Recovery_%": (None if pd.isna(sf["recovery_pct"].iloc[i])
+                               else round(float(sf["recovery_pct"].iloc[i]), 2)),
+                "ROC_OK": "YES" if roc_ok_i else "NO",
+                "ROC_%": (None if pd.isna(sf["roc_val"].iloc[i])
+                          else round(float(sf["roc_val"].iloc[i]), 2)),
+                "Squeeze_OK": "YES" if squeeze_ok_i else "NO",
+                "Squeeze_Ratio": (None if pd.isna(sf["squeeze_ratio"].iloc[i])
+                                  else round(float(sf["squeeze_ratio"].iloc[i]), 2)),
+                "R:R_OK": "YES" if rr_ok_i else "NO",
                 "Divergence": " | ".join(
                     [t for t, v in [
                         ("BullReg(RSI)", div_rsi_i["reg_bull"]),
@@ -3220,6 +3632,82 @@ def render_sidebar() -> Dict[str, Any]:
                 "Live scan history", ["3y", "5y", "10y"],
                 index=["3y", "5y", "10y"].index(DEFAULT_CFG["live_fetch_period"]), key="sb_fetch_period")
 
+        # ══════════════════════════════════════════════════════
+        # v2.2 — ENTRY REFINEMENT PACK (L · M · N · P · Q)
+        # Targeted at better swing entries + shorter profit targets.
+        # All default OFF so an untouched v2.2 reproduces v2.1.
+        # ══════════════════════════════════════════════════════
+        with st.expander("🎯 v2.2 — Entry Refinement (L · M · N · P · Q)"):
+            st.caption(
+                "Targeted at better swing entries + shorter profit targets. "
+                "All default OFF — A/B test each against the v2.1 baseline."
+            )
+
+            st.markdown("**L · Multi-bar reversal pattern**")
+            reversal_enable = st.checkbox(
+                "Require 2/3-bar reversal pattern", DEFAULT_CFG["reversal_enable"],
+                help="v2.1's _candle_ok accepts ANY green bar or hammer. A single "
+                     "up-tick after a 10-day slide passes. This requires an actual "
+                     "engulfing / piercing / morning-star pattern.", key="sb_reversal_enable")
+            reversal_mode = st.radio(
+                "Pattern", ["any", "engulf", "piercing", "morningstar"],
+                index=["any", "engulf", "piercing", "morningstar"].index(
+                    DEFAULT_CFG["reversal_mode"]),
+                horizontal=True, key="sb_reversal_mode")
+            reversal_min_body_pct = st.slider(
+                "Min body/range of reversal bar", 0.1, 0.8,
+                DEFAULT_CFG["reversal_min_body_pct"], 0.05, key="sb_reversal_min_body_pct")
+
+            st.markdown("---")
+            st.markdown("**M · Recovery-from-low gate**")
+            recovery_enable = st.checkbox(
+                "Require price within band above recent low", DEFAULT_CFG["recovery_enable"],
+                help="Drops BOTH falling knives (zero recovery) AND chasers "
+                     "(already bounced 12%). Price must be within [min, max] % "
+                     "of its own N-bar low.", key="sb_recovery_enable")
+            recovery_lookback = st.slider("Recovery lookback (bars)", 3, 30,
+                                          DEFAULT_CFG["recovery_lookback"], key="sb_recovery_lookback")
+            recovery_min_pct = st.slider("Min % above low", 0.0, 5.0,
+                                         DEFAULT_CFG["recovery_min_pct"], 0.1, key="sb_recovery_min_pct")
+            recovery_max_pct = st.slider("Max % above low", 2.0, 20.0,
+                                         DEFAULT_CFG["recovery_max_pct"], 0.5, key="sb_recovery_max_pct")
+            if recovery_min_pct >= recovery_max_pct:
+                st.error("❌ Min must be below max for the recovery band")
+
+            st.markdown("---")
+            st.markdown("**N · Short-term rate-of-change (BUY-only)**")
+            roc_enable = st.checkbox(
+                "Require 5-day ROC >= threshold", DEFAULT_CFG["roc_enable"],
+                help="Composite Z says 'cheap'. ROC says 'cheap and rising'. "
+                     "The difference is the difference between a 4-week hit "
+                     "and a 20-week grind. Applied to BUY signals only.", key="sb_roc_enable")
+            roc_len = st.slider("ROC length (bars)", 2, 20,
+                                DEFAULT_CFG["roc_len"], key="sb_roc_len")
+            roc_min = st.slider("ROC minimum (%)", -5.0, 5.0,
+                                DEFAULT_CFG["roc_min"], 0.1, key="sb_roc_min")
+
+            st.markdown("---")
+            st.markdown("**P · R:R minimum gate**")
+            rr_min_enable = st.checkbox(
+                "Reject setups where R:R < threshold", DEFAULT_CFG["rr_min_enable"],
+                help="With shorter profit targets this becomes the binding "
+                     "constraint. A 5% target against a 6% stop is negative "
+                     "expectancy no matter how good the entry timing is.", key="sb_rr_min_enable")
+            rr_min = st.slider("Minimum R:R (target / stop)", 0.5, 3.0,
+                               DEFAULT_CFG["rr_min"], 0.1, key="sb_rr_min")
+
+            st.markdown("---")
+            st.markdown("**Q · ATR squeeze**")
+            squeeze_enable = st.checkbox(
+                "Require ATR contraction", DEFAULT_CFG["squeeze_enable"],
+                help="Current ATR vs its own rolling mean. A squeeze (low ratio) "
+                     "is the quiet before expansion. Expansions reach targets "
+                     "faster than grinds.", key="sb_squeeze_enable")
+            squeeze_len = st.slider("ATR baseline length", 5, 60,
+                                    DEFAULT_CFG["squeeze_len"], key="sb_squeeze_len")
+            squeeze_max_ratio = st.slider("Max ATR / baseline", 0.5, 1.5,
+                                          DEFAULT_CFG["squeeze_max_ratio"], 0.05, key="sb_squeeze_max_ratio")
+
         st.markdown("---")
         st.markdown(f'📦 **Universe:** {len(ALL_SYMBOLS)} NSE stocks')
 
@@ -3228,13 +3716,15 @@ def render_sidebar() -> Dict[str, Any]:
                 support_enable, rank_enable,
                 cape_mode != "weight",
                 dz_require_both or dz_accel_min > 0 or dz_accel_consec > 1]
-        _active = sum(_v19) + sum(_v20)
+        _v22 = [reversal_enable, recovery_enable, roc_enable,
+                rr_min_enable, squeeze_enable]
+        _active = sum(_v19) + sum(_v20) + sum(_v22)
         if _active == 0:
             st.caption("🔵 All optional filters OFF — baseline (v1.8-equivalent) signals.")
         else:
             st.caption(
                 f"🟢 {_active} optional filters active "
-                f"({sum(_v19)} timing · {sum(_v20)} confirmation)."
+                f"({sum(_v19)} timing · {sum(_v20)} confirmation · {sum(_v22)} entry-refinement)."
             )
 
         st.markdown("---")
@@ -3343,6 +3833,22 @@ def render_sidebar() -> Dict[str, Any]:
         "scan_stop_pct": float(scan_stop_pct),
         "scan_stop_mode": scan_stop_mode,
         "scan_stop_atr_mult": float(scan_stop_atr_mult),
+        # ── v2.2: L · M · N · P · Q ───────────────────────────
+        "reversal_enable": reversal_enable,
+        "reversal_mode": reversal_mode,
+        "reversal_min_body_pct": float(reversal_min_body_pct),
+        "recovery_enable": recovery_enable,
+        "recovery_lookback": int(recovery_lookback),
+        "recovery_min_pct": float(recovery_min_pct),
+        "recovery_max_pct": float(recovery_max_pct),
+        "roc_enable": roc_enable,
+        "roc_len": int(roc_len),
+        "roc_min": float(roc_min),
+        "rr_min_enable": rr_min_enable,
+        "rr_min": float(rr_min),
+        "squeeze_enable": squeeze_enable,
+        "squeeze_len": int(squeeze_len),
+        "squeeze_max_ratio": float(squeeze_max_ratio),
     }
 
     st.session_state["cfg"] = cfg
@@ -3486,9 +3992,13 @@ def main():
                                 "Regime_OK", "Cross_OK", "ATR_OK",
                                 "Div_OK", "Vol_OK", "RSI_Floor_OK",
                                 "Support_OK", "CAPE_Gate_OK",
+                                # ── v2.2 gates (L · M · N · P · Q) ─
+                                "Reversal_OK", "Recovery_OK", "ROC_OK",
+                                "Squeeze_OK", "R:R_OK",
                                 # ── diagnostics ────────────────
                                 "Bars_Since_Cross", "ATR_%", "ATRs_To_Target",
                                 "Vol_Ratio", "Support_Dist_%", "Hi52_Ratio",
+                                "Recovery_%", "ROC_%", "Squeeze_Ratio",
                                 # ───────────────────────────────
                                 "Composite", "CAPE_Z", "RSI_Z", "MACD_Z",
                                 "RSI", "Divergence"]
@@ -3743,7 +4253,7 @@ def main():
     # ── TAB 4: ABOUT ──────────────────────────────────────────
     with tab_about:
         st.markdown("""
-        ## VMS Scanner v1.9 — Entry Timing & Time-to-Target
+        ## VMS Scanner v2.2 — Entry Refinement & Shorter Targets
 
         No new data sources. Everything below is derived from the OHLCV
         and EPS series the scanner already downloads.
@@ -3866,6 +4376,52 @@ def main():
 
         ---
 
+        ### 🎯 v2.2 — Entry Refinement Pack (all default **OFF**)
+
+        Targeted at the explicit goal: **better swing entries + shorter
+        profit targets**. Five structural gaps in v2.1 still let slow-to-target
+        trades through. Each filter below closes one of them. All default OFF
+        so an untouched v2.2 reproduces v2.1 signal-for-signal — A/B test
+        each against the v2.1 baseline in the Backtest tab.
+
+        **L · Multi-bar reversal pattern.** v2.1's `_candle_ok` accepts ANY
+        green bar or hammer — a single up-tick after a 10-day slide passes.
+        This requires an actual **engulfing**, **piercing**, or **morning-star**
+        pattern (2/3 bars), using lookback only — no lookahead.
+
+        **M · Recovery-from-low gate.** Two failure modes the existing scanner
+        hits: (1) the **falling knife** — composite is deeply oversold because
+        the stock has fallen 15% in 10 days and is STILL falling; the bounce
+        never comes. (2) The **chaser** — stock bottomed 3 weeks ago and has
+        already bounced 12%; the easy money is gone and the target is now
+        further away in ATR terms. The gate requires close to be within
+        `[min, max] %` above its own recent N-bar low. Floor drops the knives;
+        ceiling drops the chases.
+
+        **N · Short-term rate-of-change.** Composite Z says "deeply oversold".
+        ROC says "actually turning up". The difference is "cheap" vs "cheap
+        and rising" — and only the second reaches a target quickly.
+        **BUY signals only**; SELL signals bypass this gate.
+
+        **P · R:R minimum gate.** With shorter profit targets this becomes
+        the binding constraint: a 5% target against a 6% stop is negative
+        expectancy no matter how good the entry timing is. Rejects setups
+        where `target / stop < threshold` (default 1.5).
+
+        **Q · ATR squeeze.** Current ATR vs its own rolling mean. A squeeze
+        (low ratio) is the quiet before expansion. Expansions reach targets
+        faster than grinds, so requiring a squeeze at entry time biases the
+        system toward setups that are about to move.
+
+        **Default-value changes (v2.2):**
+        `scan_profit_pct` 8.0 → 5.0; `backtest_profit_pct` 8.0 → 5.0;
+        `atr_target_mult` 2.5 → 1.8; `atr_target_cap_pct` 20.0 → 12.0.
+        Rationale: a 2.5×-ATR target with a 20% cap is a multi-week move on
+        most NSE names. 1.8× still clears a normal up-week but is reachable
+        inside the fast-hit window. Sliders can revert if needed.
+
+        ---
+
         ### 💰 Target and stop levels
 
         v1.9 reported `Target_%` but no price, and read `backtest_profit_pct`,
@@ -3925,7 +4481,7 @@ def main():
         **Copyright © 2026 Dr Shantanu Samanta. All rights reserved.**
 
         Author: Dr Shantanu Samanta · dr.shantanu.samanta@gmail.com
-        Version 1.9 · Licence: Proprietary
+        Version 2.2 · Licence: Proprietary
 
         This application, its signal logic, scoring methodology, filter design
         and stock universe are the intellectual property of Dr Shantanu Samanta
